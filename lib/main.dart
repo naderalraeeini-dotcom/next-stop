@@ -155,6 +155,11 @@ class StopsPage extends StatefulWidget {
 class _StopsPageState extends State<StopsPage> {
   List<Map<String,dynamic>> get stops => (widget.route['stops'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)).toList();
   Future<void> persist(List<Map<String,dynamic>> items) async { widget.route['stops']=items; await widget.onChanged(); if(mounted)setState((){}); }
+  @override void initState(){super.initState();WidgetsBinding.instance.addPostFrameCallback((_)=>checkNewDay());}
+  Future<void> checkNewDay() async {
+    final now=DateTime.now().toIso8601String().substring(0,10);
+    if(widget.route['tripDay']!=null && widget.route['tripDay'].toString()!=now){final list=stops;for(final s in list){s['done']=false;}widget.route['stops']=list;widget.route['tripDay']=now;widget.route['tripStarted']=false;widget.route['dailyStopIds']=list.where((s)=>s['enabled']!=false).map((s)=>s['id'].toString()).toList();await widget.onChanged();if(mounted){setState((){});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('New day: unfinished stops have been reset.')));}}
+  }
   Future<void> addStop([Map<String,dynamic>? existing]) async {
     final isEdit = existing != null;
     final fields = <String,TextEditingController>{
@@ -168,13 +173,16 @@ class _StopsPageState extends State<StopsPage> {
       'packages': TextEditingController(text: (existing?['packages'] ?? 1).toString()),
       'serial': TextEditingController(text: existing?['serial']?.toString() ?? ''),
       'notes': TextEditingController(text: existing?['notes']?.toString() ?? ''),
+      'hours': TextEditingController(text: existing?['hours']?.toString() ?? ''),
+      'closedDates': TextEditingController(text: existing?['closedDates']?.toString() ?? ''),
+      'smartNote': TextEditingController(text: existing?['smartNote']?.toString() ?? ''),
     };
     String type = existing?['type']?.toString() ?? 'Fixed';
     bool enabled = existing?['enabled'] != false;
     final ok = await showDialog<bool>(context: context, builder: (ctx)=> StatefulBuilder(builder:(ctx,setD)=>AlertDialog(
       title: Text(isEdit?'Edit stop':'Add stop'),
       content: SizedBox(width: 500, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        for (final entry in fields.entries) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextField(controller: entry.value, keyboardType: entry.key=='packages'?TextInputType.number:TextInputType.text, maxLines: entry.key=='notes'?3:1, decoration: InputDecoration(labelText: const {'shop':'Shop / customer name','street':'Street name','number':'House number','apartment':'Apartment (optional)','postal':'Postal code','city':'City','country':'Country','packages':'Package count','serial':'Stop / reference number','notes':'Notes / description'}[entry.key]))),
+        for (final entry in fields.entries) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextField(controller: entry.value, keyboardType: entry.key=='packages'?TextInputType.number:TextInputType.text, maxLines: ['notes','smartNote'].contains(entry.key)?2:1, decoration: InputDecoration(labelText: const {'shop':'Shop / customer name','street':'Street name','number':'House number','apartment':'Apartment (optional)','postal':'Postal code','city':'City','country':'Country','packages':'Package count','serial':'Stop / reference number','notes':'Notes / description','hours':'Opening hours (manual)','closedDates':'Closed dates (YYYY-MM-DD, comma separated)','smartNote':'Smart closure reminder'}[entry.key],helperText:entry.key=='closedDates'?'Example: 2026-12-25, 2026-12-26':null))),
         DropdownButtonFormField<String>(value:type, decoration: const InputDecoration(labelText:'Stop type'), items: const [DropdownMenuItem(value:'Fixed',child:Text('Fixed stop • Green')),DropdownMenuItem(value:'Guest',child:Text('Guest stop • Red'))], onChanged:(v)=>setD(()=>type=v??'Fixed')),
         SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Include in today’s route'), value:enabled, onChanged:(v)=>setD(()=>enabled=v)),
       ]))),
@@ -266,7 +274,7 @@ class _StopsPageState extends State<StopsPage> {
   void showDetails(Map<String,dynamic> s,int i) {
     showModalBottomSheet(context:context,showDragHandle:true,isScrollControlled:true,builder:(ctx)=>Padding(padding:const EdgeInsets.all(20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[
       Text('Stop '+(i+1).toString()+': '+(s['shop']??'').toString(),style:Theme.of(context).textTheme.titleLarge),const SizedBox(height:12),
-      for(final pair in <String,String>{'Address':address(s),'Packages':s['packages'].toString(),'Type':s['type'].toString(),'Reference':(s['serial']??'').toString(),'Notes':(s['notes']??'').toString(),'Created':(s['created']??'').toString(),'Status':s['done']==true?'Completed':'Pending'}.entries) Padding(padding:const EdgeInsets.symmetric(vertical:5),child:Text(pair.key+': '+(pair.value.isEmpty?'—':pair.value))),
+      for(final pair in <String,String>{'Address':address(s),'Packages':s['packages'].toString(),'Type':s['type'].toString(),'Opening hours':(s['hours']??'').toString(),'Closed dates':(s['closedDates']??'').toString(),'Smart reminder':(s['smartNote']??'').toString(),'Reference':(s['serial']??'').toString(),'Notes':(s['notes']??'').toString(),'Created':(s['created']??'').toString(),'Status':s['done']==true?'Completed':'Pending'}.entries) Padding(padding:const EdgeInsets.symmetric(vertical:5),child:Text(pair.key+': '+(pair.value.isEmpty?'—':pair.value))),
       const SizedBox(height:16),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
     ]))));
   }
