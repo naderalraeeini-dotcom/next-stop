@@ -199,31 +199,64 @@ class _StopsPageState extends State<StopsPage> {
   }
   @override
   Widget build(BuildContext context) {
-    final items=stops; final active=items.where((s)=>s['enabled']==true && s['done']!=true).length;
+    final allItems=stops;
+    if ((widget.route['dailyStopIds'] as List? ?? []).isEmpty && allItems.isNotEmpty) widget.route['dailyStopIds']=allItems.where((s)=>s['enabled']!=false).map((s)=>s['id'].toString()).toList();
+    final ids=(widget.route['dailyStopIds'] as List? ?? []).map((e)=>e.toString()).toSet();
+    final items=allItems.where((s)=>ids.contains(s['id'].toString())).toList(); final active=items.where((s)=>s['enabled']!=false && s['done']!=true).length;
     return Scaffold(
       appBar:AppBar(title:Text(widget.route['name']?.toString()??'Route'), actions:[IconButton(tooltip:'Edit route warehouse',icon:const Icon(Icons.edit_location_alt),onPressed:()=>editWarehouse())]),
       floatingActionButton:FloatingActionButton.extended(onPressed:()=>addStop(),backgroundColor:orange,foregroundColor:Colors.white,icon:const Icon(Icons.add_location_alt),label:const Text('Add stop')),
       body:Column(children:[
-        Container(color:Colors.white,padding:const EdgeInsets.all(16),child:Row(children:[const Icon(Icons.warehouse_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Warehouse / start & return',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' active',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))])),
+        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
         Expanded(child:items.isEmpty?const Center(child:Text('No stops yet. Add your first stop.')):ReorderableListView.builder(padding:const EdgeInsets.all(12),itemCount:items.length,onReorder:(oldIndex,newIndex) async {final list=stops; if(newIndex>oldIndex)newIndex--; final item=list.removeAt(oldIndex); list.insert(newIndex,item); await persist(list);},itemBuilder:(ctx,i){
           final s=items[i]; final done=s['done']==true; final guest=s['type']=='Guest';
-          return Card(key:ValueKey(s['id']),margin:const EdgeInsets.only(bottom:8),child:Opacity(opacity:done ? .48 : 1,child:ListTile(
+          return Card(key:ValueKey(s['id']),margin:const EdgeInsets.only(bottom:8),child:Opacity(opacity:done ? .38 : 1,child:Column(children:[ListTile(
             leading:CircleAvatar(backgroundColor:done?Colors.grey.withOpacity(.15):(guest?Colors.red.withOpacity(.12):Colors.green.withOpacity(.12)),foregroundColor:done?Colors.grey:(guest?Colors.red:Colors.green),child:Icon(done?Icons.check:Icons.location_on)),
             title:Text((i+1).toString()+'. '+((s['shop']?.toString().isNotEmpty==true)?s['shop'].toString():'Stop'),style:const TextStyle(fontWeight:FontWeight.bold)),
             subtitle:Text(address(s)+'\n'+s['packages'].toString()+' packages • '+s['type'].toString()+' • '+(done?'Completed':'Pending')),
             isThreeLine:true,
-            trailing:PopupMenuButton<String>(onSelected:(v)async{if(v=='edit')await addStop(s);if(v=='navigate')await navigate(s);if(v=='done')await finishStop(s);if(v=='delete')await deleteStop(s);if(v=='details')showDetails(s,i);},itemBuilder:(_)=>[const PopupMenuItem(value:'details',child:Text('Details')),const PopupMenuItem(value:'edit',child:Text('Edit')),const PopupMenuItem(value:'navigate',child:Text('Navigate')),PopupMenuItem(value:'done',child:Text(done?'Mark pending':'Mark completed')),const PopupMenuItem(value:'delete',child:Text('Delete'))]),
+            trailing:PopupMenuButton<String>(onSelected:(v)async{if(v=='edit')await addStop(s);if(v=='restore')await restoreStop(s);if(v=='delete')await deleteStop(s);if(v=='details')showDetails(s,i);},itemBuilder:(_)=>[const PopupMenuItem(value:'details',child:Text('Details')),const PopupMenuItem(value:'edit',child:Text('Edit')),if(done)const PopupMenuItem(value:'restore',child:Text('Return to today’s route')),const PopupMenuItem(value:'delete',child:Text('Delete'))]),
             onTap:()=>showDetails(s,i),
-          )));
+          ),Padding(padding:const EdgeInsets.fromLTRB(12,0,12,12),child:Row(children:[Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:blue),onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Navigate'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:done?Colors.grey:orange),onPressed:done?()=>restoreStop(s):()=>finishStop(s),icon:Icon(done?Icons.undo:Icons.check_circle_outline),label:Text(done?'Restore':'Mark complete')))]))])));
         })),
       ]),
     );
   }
   Future<void> editWarehouse() async {
     final c=TextEditingController(text:widget.route['warehouse']?.toString()??'');
-    final ok=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Warehouse address'),content:TextField(controller:c,decoration:const InputDecoration(labelText:'Address')),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Save'))]));
-    if(ok==true){widget.route['warehouse']=c.text.trim();await widget.onChanged();if(mounted)setState((){});}
+    final end=TextEditingController(text:widget.route['endAddress']?.toString()??widget.route['warehouse']?.toString()??'');
+    final ok=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Route addresses'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:c,decoration:const InputDecoration(labelText:'Start / warehouse address')),TextField(controller:end,decoration:const InputDecoration(labelText:'Return point address'))]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Save'))]));
+    if(ok==true){widget.route['warehouse']=c.text.trim();widget.route['endAddress']=end.text.trim();await widget.onChanged();if(mounted)setState((){});}
   }
+  Future<void> navigateAddress(String destination,{List<String> waypoints=const []}) async {
+    if(destination.trim().isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Set the destination address first.')));return;}
+    final params=<String,String>{'api':'1','destination':destination,'travelmode':'driving'};
+    if(waypoints.isNotEmpty)params['waypoints']='optimize:true|'+waypoints.join('|');
+    final uri=Uri.https('www.google.com','/maps/dir/',params);
+    if(!await launchUrl(uri,mode:LaunchMode.externalApplication)&&mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open maps')));
+  }
+  Future<void> chooseTodayStops() async {
+    final all=stops.where((s)=>s['enabled']!=false).toList();
+    final selected=(widget.route['dailyStopIds'] as List? ?? all.map((s)=>s['id'].toString()).toList()).map((e)=>e.toString()).toSet();
+    final result=await showDialog<List<String>>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text('Select stops for today'),content:SizedBox(width:420,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[for(final s in all)CheckboxListTile(value:selected.contains(s['id'].toString()),title:Text((s['shop']??'Stop').toString()),subtitle:Text(address(s)),onChanged:(v)=>setD(()=>v==true?selected.add(s['id'].toString()):selected.remove(s['id'].toString())))]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,selected.toList()),child:const Text('Confirm'))])));
+    if(result!=null){widget.route['dailyStopIds']=result;widget.route['tripDay']=DateTime.now().toIso8601String().substring(0,10);await widget.onChanged();if(mounted)setState((){});}
+  }
+  Future<void> optimizeToday() async {
+    final ids=(widget.route['dailyStopIds'] as List? ?? []).map((e)=>e.toString()).toSet();
+    final chosen=stops.where((s)=>ids.contains(s['id'].toString())&&s['enabled']!=false&&s['done']!=true).toList();
+    if(chosen.isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Select today’s stops first.')));return;}
+    final points=<String>[];final start=(widget.route['warehouse']??'').toString();if(start.isNotEmpty)points.add(start);points.addAll(chosen.map(address));
+    final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString();
+    await navigateAddress(end.isEmpty?address(chosen.last):end,waypoints:points.length>1?points:const []);
+  }
+  Future<void> finishRoute() async {
+    final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString();
+    if(end.trim().isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Set the return-point address in route settings first.')));return;}
+    final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Finish this route?'),content:Text('Confirm arrival at the return point:\\n'+end+'\\n\\nThis resets completed stops for a new trip.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Mark complete'))]));
+    if(yes!=true)return;final list=stops;for(final s in list){s['done']=false;}widget.route['stops']=list;widget.route['tripDay']=DateTime.now().toIso8601String().substring(0,10);widget.route['tripStarted']=false;widget.route['dailyStopIds']=list.where((s)=>s['enabled']!=false).map((s)=>s['id'].toString()).toList();await widget.onChanged();if(mounted)setState((){});
+  }
+  Future<void> restoreStop(Map<String,dynamic> s) async {final list=stops;final i=list.indexWhere((x)=>x['id']==s['id']);if(i<0)return;list[i]['done']=false;final ids=(widget.route['dailyStopIds'] as List? ?? []).map((e)=>e.toString()).toList();if(!ids.contains(s['id'].toString()))ids.add(s['id'].toString());widget.route['dailyStopIds']=ids;await persist(list);}
+
   Future<void> deleteStop(Map<String,dynamic> s) async {
     final first=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Delete stop?'),content:const Text('Are you sure you want to delete this stop?'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Confirm'))]));
     if(first!=true||!mounted)return;
