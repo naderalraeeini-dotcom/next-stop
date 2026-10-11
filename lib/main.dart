@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -13,7 +15,7 @@ class NextStopApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: 'Next Stop',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: blue), scaffoldBackgroundColor: const Color(0xFFF7F9FC), useMaterial3: true, appBarTheme: const AppBarTheme(backgroundColor: Colors.white, foregroundColor: Color(0xFF17212F))),
+    theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: blue), scaffoldBackgroundColor: const Color(0xFFFFFFFF), useMaterial3: true, appBarTheme: const AppBarTheme(backgroundColor: Colors.white, foregroundColor: Color(0xFF17212F)), cardTheme: CardThemeData(color: Colors.white, elevation: 1, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)))),
     home: const RoutesPage(),
   );
 }
@@ -68,7 +70,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w800)), actions: [IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
+    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
     floatingActionButton: FloatingActionButton.extended(onPressed: addRoute, backgroundColor: orange, foregroundColor: Colors.white, icon: const Icon(Icons.add), label: const Text('New route')),
     body: loading ? const Center(child: CircularProgressIndicator()) : routes.isEmpty
       ? Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.route, size: 68, color: blue), const SizedBox(height: 16), const Text('Plan your delivery day', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), const Text('Create a route, add its stops, and keep your route data saved on this phone.', textAlign: TextAlign.center), const SizedBox(height: 18), FilledButton.icon(onPressed: addRoute, icon: const Icon(Icons.add), label: const Text('Create first route'))])))
@@ -80,15 +82,67 @@ class _RoutesPageState extends State<RoutesPage> {
           title: Text(r['name']?.toString() ?? 'Route', style: const TextStyle(fontWeight: FontWeight.bold)),
           subtitle: Text(stops.length.toString() + ' stops\n' + ((r['warehouse'] ?? '').toString().isEmpty ? 'Warehouse address not set' : r['warehouse'].toString())),
           isThreeLine: true,
-          trailing: PopupMenuButton<String>(onSelected: (v) { if(v=='edit') editRoute(r); if(v=='delete') deleteRoute(r); }, itemBuilder: (_) => const [PopupMenuItem(value:'edit', child: Text('Edit route')), PopupMenuItem(value:'delete', child: Text('Delete route'))]),
+          trailing: PopupMenuButton<String>(onSelected: (v) { if(v=='edit') editRoute(r); if(v=='delete') deleteRoute(r); if(v=='share') shareRoute(r); }, itemBuilder: (_) => const [PopupMenuItem(value:'edit', child: Text('Edit route')), PopupMenuItem(value:'delete', child: Text('Delete route'))]),
           onTap: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => StopsPage(route: r, onChanged: save))); if(mounted) setState(() {}); },
         ));
       }),
   );
+
+  Future<void> shareRoute(Map<String,dynamic> route) async {
+    final payload = jsonEncode({'app':'next-stop','version':1,'route':route});
+    if (payload.length > 2500) {
+      if (mounted) showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Route too large'),content:const Text('This route is too large for one QR code. Try sharing a route with fewer stops.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('OK'))]));
+      return;
+    }
+    if (!mounted) return;
+    showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Share route: ${route['name']}'),content:Column(mainAxisSize:MainAxisSize.min,children:[const Text('Ask the other person to open Next Stop and scan this code.'),const SizedBox(height:12),QrImageView(data:payload,size:245),const SizedBox(height:8),const Text('The receiving phone will ask for confirmation.',textAlign:TextAlign.center)]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+  }
+  Future<void> scanRoute() async {
+    final scanned = await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanRoutePage()));
+    if (scanned == null || !mounted) return;
+    try {
+      final data = jsonDecode(scanned) as Map<String,dynamic>;
+      if (data['app'] != 'next-stop' || data['route'] is! Map) throw const FormatException();
+      final incoming = Map<String,dynamic>.from(data['route'] as Map);
+      final incomingStops = (incoming['stops'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)).toList();
+      incoming['id'] = DateTime.now().microsecondsSinceEpoch.toString();
+      incoming['name'] = '${incoming['name'] ?? 'Imported route'} (imported)';
+      incoming['stops'] = incomingStops;
+      incoming['created'] = DateTime.now().toIso8601String();
+      incoming['dailyStopIds'] = <String>[];
+      incoming['tripDay'] = DateTime.now().toIso8601String().substring(0,10);
+      incoming['tripStarted'] = false;
+      final yes = await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Import route?'),content:Text('Add "${incoming['name']}" with ${incomingStops.length} stops? Existing routes will not change.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Confirm import'))]));
+      if (yes == true && mounted) { setState(()=>routes.add(incoming)); await save(); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Route imported successfully'))); }
+    } catch (_) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('This is not a valid Next Stop route QR code.'))); }
+  }
+
   Future<void> deleteRoute(Map<String,dynamic> r) async {
     final yes = await showDialog<bool>(context: context, builder: (ctx)=>AlertDialog(title: const Text('Delete route?'), content: Text('Delete "' + r['name'].toString() + '" and its stops?'), actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false), child:const Text('Cancel')), FilledButton(onPressed:()=>Navigator.pop(ctx,true), child:const Text('Delete'))]));
     if (yes == true) { setState(()=>routes.remove(r)); await save(); }
   }
+}
+
+
+class ScanRoutePage extends StatefulWidget {
+  const ScanRoutePage({super.key});
+  @override
+  State<ScanRoutePage> createState()=>_ScanRoutePageState();
+}
+class _ScanRoutePageState extends State<ScanRoutePage> {
+  bool handled = false;
+  @override
+  Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(title:const Text('Scan route QR code')),
+    body:Column(children:[
+      const Padding(padding:EdgeInsets.all(18),child:Text('Point the camera at a Next Stop route QR code. Android will request camera permission if needed.',textAlign:TextAlign.center)),
+      Expanded(child:Padding(padding:const EdgeInsets.all(16),child:ClipRRect(borderRadius:BorderRadius.circular(18),child:MobileScanner(onDetect:(capture){
+        if(handled)return;
+        final value=capture.barcodes.isEmpty?null:capture.barcodes.first.rawValue;
+        if(value!=null&&value.isNotEmpty){handled=true;Navigator.pop(context,value);}
+      })))),
+    ]),
+  );
 }
 
 class StopsPage extends StatefulWidget {
