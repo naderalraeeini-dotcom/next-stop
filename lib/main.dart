@@ -55,7 +55,7 @@ class _RoutesPageState extends State<RoutesPage> {
       actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create'))],
     ));
     if (ok == true && name.text.trim().isNotEmpty) {
-      setState(() => routes.add({'id': DateTime.now().microsecondsSinceEpoch.toString(), 'name': name.text.trim(), 'warehouse': warehouse.text.trim(), 'stops': <dynamic>[], 'created': DateTime.now().toIso8601String()}));
+      setState(() => routes.add({'id': DateTime.now().microsecondsSinceEpoch.toString(), 'name': name.text.trim(), 'warehouse': warehouse.text.trim(), 'endAddress': warehouse.text.trim(), 'stops': <dynamic>[], 'dailyStopIds': <String>[], 'tripDay': DateTime.now().toIso8601String().substring(0,10), 'tripStarted': false, 'created': DateTime.now().toIso8601String()}));
       await save();
     }
   }
