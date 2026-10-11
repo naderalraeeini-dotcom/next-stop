@@ -82,7 +82,7 @@ class _RoutesPageState extends State<RoutesPage> {
           title: Text(r['name']?.toString() ?? 'Route', style: const TextStyle(fontWeight: FontWeight.bold)),
           subtitle: Text(stops.length.toString() + ' stops\n' + ((r['warehouse'] ?? '').toString().isEmpty ? 'Warehouse address not set' : r['warehouse'].toString())),
           isThreeLine: true,
-          trailing: PopupMenuButton<String>(onSelected: (v) { if(v=='edit') editRoute(r); if(v=='delete') deleteRoute(r); if(v=='share') shareRoute(r); }, itemBuilder: (_) => const [PopupMenuItem(value:'edit', child: Text('Edit route')), PopupMenuItem(value:'delete', child: Text('Delete route'))]),
+          trailing: PopupMenuButton<String>(onSelected: (v) { if(v=='edit') editRoute(r); if(v=='delete') deleteRoute(r); if(v=='share') shareRoute(r); }, itemBuilder: (_) => const [PopupMenuItem(value:'edit', child: Text('Edit route')), PopupMenuItem(value:'share', child: Text('Share route / QR code')), PopupMenuItem(value:'delete', child: Text('Delete route'))]),
           onTap: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => StopsPage(route: r, onChanged: save))); if(mounted) setState(() {}); },
         ));
       }),
