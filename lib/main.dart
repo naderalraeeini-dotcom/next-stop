@@ -9,6 +9,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -75,7 +78,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Fuel stations', onPressed: openFuelStations, icon: const Icon(Icons.local_gas_station)), IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
+    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Fuel stations', onPressed: openFuelStations, icon: const Icon(Icons.local_gas_station)), IconButton(tooltip: 'Import route file', onPressed: importRouteFile, icon: const Icon(Icons.file_open)), IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
     floatingActionButton: FloatingActionButton.extended(onPressed: addRoute, backgroundColor: orange, foregroundColor: Colors.white, icon: const Icon(Icons.add), label: const Text('New route')),
     body: loading ? const Center(child: CircularProgressIndicator()) : routes.isEmpty
       ? Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.route, size: 68, color: blue), const SizedBox(height: 16), const Text('Plan your delivery day', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), const Text('Create a route, add its stops, and keep your route data saved on this phone.', textAlign: TextAlign.center), const SizedBox(height: 18), FilledButton.icon(onPressed: addRoute, icon: const Icon(Icons.add), label: const Text('Create first route'))])))
@@ -95,19 +98,101 @@ class _RoutesPageState extends State<RoutesPage> {
 
   Future<void> openFuelStations() async { final uri=Uri.https('www.google.com','/maps/search/',{'api':'1','query':'petrol stations near me'}); if(!await launchUrl(uri,mode:LaunchMode.externalApplication)&&mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open fuel stations map'))); }
 
-  Future<void> shareRoute(Map<String,dynamic> route) async {
-    final jsonPayload = jsonEncode({'app':'next-stop','version':1,'route':route});
-    // Split compressed payload into multiple QR pages instead of rejecting large routes.
-    final payload = 'NSZ1:' + base64Url.encode(gzip.encode(utf8.encode(jsonPayload)));
-    const chunkSize=900;
-    final total=(payload.length/chunkSize).ceil();
-    final chunks=<String>[];
-    final session=DateTime.now().millisecondsSinceEpoch.toRadixString(36);
-    for(var n=0;n<total;n++){final piece=payload.substring(n*chunkSize,(n*chunkSize+chunkSize>payload.length)?payload.length:n*chunkSize+chunkSize);chunks.add('NSC1:$session:${n+1}:$total:$piece');}
-    if (!mounted) return;
-    showDialog<void>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:Text('Share route: ${route['name']}'),content:Column(mainAxisSize:MainAxisSize.min,children:[Text('Scan all ${chunks.length} QR pages in order on the receiving phone.'),const SizedBox(height:12),SizedBox(width:270,height:300,child:PageView.builder(itemCount:chunks.length,onPageChanged:(_)=>setD((){}),itemBuilder:(ctx,index)=>Column(children:[QrImageView(data:chunks[index],size:245),Text('QR ${index+1} / ${chunks.length}',style:const TextStyle(fontWeight:FontWeight.bold))]))),const SizedBox(height:8),const Text('The receiving phone will ask for confirmation after the final page.',textAlign:TextAlign.center)]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))])));
-
+  Future<Map<String,dynamic>> _routeWithPhotos(Map<String,dynamic> route) async {
+    final copy=Map<String,dynamic>.from(jsonDecode(jsonEncode(route)) as Map);
+    Future<String?> encodePhoto(dynamic path) async {
+      if(path==null||path.toString().isEmpty)return null;
+      try { final file=File(path.toString()); if(!await file.exists())return null; return base64Encode(await file.readAsBytes()); } catch (_) { return null; }
+    }
+    final stops=<Map<String,dynamic>>[];
+    for(final raw in (copy['stops'] as List? ?? [])){
+      final s=Map<String,dynamic>.from(raw as Map);
+      final data=await encodePhoto(s['photoPath']);
+      if(data!=null)s['photoDataBase64']=data;
+      s.remove('photoPath');
+      stops.add(s);
+    }
+    copy['stops']=stops;
+    final reports=<Map<String,dynamic>>[];
+    for(final raw in (copy['reports'] as List? ?? [])){
+      final r=Map<String,dynamic>.from(raw as Map);
+      final images=<Map<String,String>>[];
+      for(final path in (r['photos'] as List? ?? [])){final data=await encodePhoto(path);if(data!=null)images.add({'base64':data,'name':'report_photo.jpg'});}
+      r['photos']=images;
+      reports.add(r);
+    }
+    if(copy.containsKey('reports'))copy['reports']=reports;
+    return copy;
   }
+
+  Future<Map<String,dynamic>> _restoreRoutePhotos(Map<String,dynamic> incoming) async {
+    final copy=Map<String,dynamic>.from(incoming);
+    final dir=await getApplicationDocumentsDirectory();
+    Future<String?> savePhoto(dynamic data,String name) async {
+      if(data==null||data.toString().isEmpty)return null;
+      try {final bytes=base64Decode(data.toString());final safe=name.replaceAll(RegExp(r'[^a-zA-Z0-9_.-]'),'_');final file=File('${dir.path}/nextstop_${DateTime.now().microsecondsSinceEpoch}_$safe');await file.writeAsBytes(bytes,flush:true);return file.path;}catch(_){return null;}
+    }
+    final stops=<Map<String,dynamic>>[];
+    for(final raw in (copy['stops'] as List? ?? [])){
+      final s=Map<String,dynamic>.from(raw as Map);
+      final path=await savePhoto(s.remove('photoDataBase64'),'shop.jpg');
+      if(path!=null)s['photoPath']=path;
+      stops.add(s);
+    }
+    copy['stops']=stops;
+    if(copy['reports'] is List){
+      final reports=<Map<String,dynamic>>[];
+      for(final raw in (copy['reports'] as List)){
+        final r=Map<String,dynamic>.from(raw as Map);
+        final photos=<String>[];
+        for(final rawPhoto in (r['photos'] as List? ?? [])){
+          if(rawPhoto is Map){final path=await savePhoto(rawPhoto['base64'],rawPhoto['name']?.toString()??'report.jpg');if(path!=null)photos.add(path);}
+          else if(rawPhoto is String)photos.add(rawPhoto);
+        }
+        r['photos']=photos;reports.add(r);
+      }
+      copy['reports']=reports;
+    }
+    return copy;
+  }
+
+  Future<void> shareRoute(Map<String,dynamic> route) async {
+    try {
+      final portable=await _routeWithPhotos(route);
+      final payload=jsonEncode({'app':'next-stop','version':2,'route':portable});
+      final safeName=(route['name']?.toString()??'route').replaceAll(RegExp(r'[^a-zA-Z0-9_-]'),'_');
+      final dir=await getTemporaryDirectory();
+      final file=File('${dir.path}/NextStop_$safeName.json');
+      await file.writeAsString(payload,flush:true);
+      await Share.shareXFiles([XFile(file.path,mimeType:'application/json')],text:'Next Stop route: ${route['name']}. On the other phone, open Next Stop and choose Import route file.');
+    } catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not share route file: $e')));
+    }
+  }
+
+  Future<void> importRouteFile() async {
+    try {
+      final picked=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['json','nextstop'],withData:true);
+      if(picked==null||picked.files.isEmpty)return;
+      final file=picked.files.single;
+      final bytes=file.bytes??(file.path!=null?await File(file.path!).readAsBytes():null);
+      if(bytes==null)throw const FormatException('The selected file could not be read.');
+      final data=jsonDecode(utf8.decode(bytes)) as Map<String,dynamic>;
+      if(data['app']!='next-stop'||data['route'] is! Map)throw const FormatException('Not a Next Stop route file.');
+      var incoming=await _restoreRoutePhotos(Map<String,dynamic>.from(data['route'] as Map));
+      final incomingStops=(incoming['stops'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)).toList();
+      incoming['id']=DateTime.now().microsecondsSinceEpoch.toString();
+      incoming['name']='${incoming['name']??'Imported route'} (imported)';
+      incoming['stops']=incomingStops;
+      incoming['created']=DateTime.now().toIso8601String();
+      incoming['dailyStopIds']=<String>[];
+      incoming['tripDay']=DateTime.now().toIso8601String().substring(0,10);
+      incoming['tripStarted']=false;
+      final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Import route file?'),content:Text('Add "${incoming['name']}" with ${incomingStops.length} stops? Existing routes will not change.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Import'))]));
+      if(yes==true&&mounted){setState(()=>routes.add(incoming));await save();ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Route and available photos imported successfully.')));}
+    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not import route file: $e')));}
+  }
+
   Future<void> scanRoute() async {
     final scanned = await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanRoutePage()));
     if (scanned == null || !mounted) return;
