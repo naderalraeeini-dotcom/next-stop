@@ -96,8 +96,8 @@ jobs:
                       s = p.read_text()
                   except (UnicodeDecodeError, OSError):
                       continue
-                  updated = re.sub(r'(compileSdkVersion\\s+)\\d+', r'\\g<1>36', s)
-                  updated = re.sub(r'(compileSdk\\s*=\\s*)\\d+', r'\\g<1>36', updated)
+                  updated = re.sub(r'(compileSdkVersion\s+)\d+', r'\g<1>36', s)
+                  updated = re.sub(r'(compileSdk\s*=\s*)\d+', r'\g<1>36', updated)
                   if updated != s:
                       p.write_text(updated)
                       changed.append(str(p))
