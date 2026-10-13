@@ -28,6 +28,19 @@ jobs:
           cache: true
       - name: Generate Android project files
         run: flutter create . --platforms=android --project-name next_stop
+      - name: Set Android compile SDK to 36 for current plugins
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/build.gradle.kts')
+          s = p.read_text()
+          old = 'compileSdk = flutter.compileSdkVersion'
+          if old in s:
+              s = s.replace(old, 'compileSdk = 36', 1)
+          elif 'compileSdk = 36' not in s:
+              raise SystemExit('Could not locate compileSdk setting in generated Gradle file')
+          p.write_text(s)
+          PY
       - name: Install icon generation dependency
         run: python3 -m pip install --user pillow
       - name: Create Next Stop launcher icon assets
