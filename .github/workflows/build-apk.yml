@@ -91,18 +91,26 @@ jobs:
           root = Path.home() / '.pub-cache' / 'hosted' / 'pub.dev'
           changed = []
           if root.exists():
-              for p in root.glob('*/android/build.gradle*'):
+              for p in root.rglob('build.gradle*'):
+                  if 'android' not in p.parts:
+                      continue
                   try:
                       s = p.read_text()
                   except (UnicodeDecodeError, OSError):
                       continue
-                  updated = re.sub(r'(?m)^(\s*compileSdkVersion\s+).+$', r'\g<1>36', s)
-                  updated = re.sub(r'(?m)^(\s*compileSdk\s*=\s*).+$', r'\g<1>36', updated)
+                  updated = re.sub(r'(?m)^(\s*compileSdkVersion\s*(?:=\s*)?).+$', r'\g<1>36', s)
+                  updated = re.sub(r'(?m)^(\s*compileSdk\s*(?:=\s*)?).+$', r'\g<1>36', updated)
                   if updated != s:
                       p.write_text(updated)
                       changed.append(str(p))
           print('Updated plugin Gradle compile SDK settings:')
-          print('\\n'.join(changed) if changed else 'No numeric plugin compileSdk settings needed changing')
+          print('\n'.join(changed) if changed else 'No plugin compileSdk settings changed')
+          picker = root / 'file_picker-8.1.4' / 'android'
+          for p in picker.glob('build.gradle*'):
+              print(f'--- {p} ---')
+              for line in p.read_text().splitlines():
+                  if 'compileSdk' in line:
+                      print(line)
           PY
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
