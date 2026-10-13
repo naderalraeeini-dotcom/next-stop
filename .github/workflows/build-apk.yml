@@ -40,7 +40,7 @@ jobs:
           storePassword=$NEXT_STOP_STORE_PASSWORD
           keyPassword=$NEXT_STOP_KEY_PASSWORD
           keyAlias=$NEXT_STOP_KEY_ALIAS
-          storeFile=../next-stop-release.jks
+          storeFile=next-stop-release.jks
           EOF
             python3 - <<'PY'
           from pathlib import Path
