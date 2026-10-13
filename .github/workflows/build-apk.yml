@@ -83,6 +83,27 @@ jobs:
           PY
       - name: Get dependencies
         run: flutter pub get
+      - name: Set Android compile SDK 36 for Flutter plugin modules
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path.home() / '.pub-cache' / 'hosted' / 'pub.dev'
+          changed = []
+          if root.exists():
+              for p in root.glob('*/android/build.gradle*'):
+                  try:
+                      s = p.read_text()
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  updated = re.sub(r'(compileSdkVersion\\s+)\\d+', r'\\g<1>36', s)
+                  updated = re.sub(r'(compileSdk\\s*=\\s*)\\d+', r'\\g<1>36', updated)
+                  if updated != s:
+                      p.write_text(updated)
+                      changed.append(str(p))
+          print('Updated plugin Gradle compile SDK settings:')
+          print('\\n'.join(changed) if changed else 'No numeric plugin compileSdk settings needed changing')
+          PY
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
       - name: Analyze
