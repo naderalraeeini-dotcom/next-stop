@@ -26,6 +26,61 @@ jobs:
           cache: true
       - name: Generate Android project files
         run: flutter create . --platforms=android --project-name next_stop
+      - name: Configure persistent Android signing (when repository secrets are set)
+        env:
+          NEXT_STOP_KEYSTORE_BASE64: ${{ secrets.NEXT_STOP_KEYSTORE_BASE64 }}
+          NEXT_STOP_STORE_PASSWORD: ${{ secrets.NEXT_STOP_STORE_PASSWORD }}
+          NEXT_STOP_KEY_PASSWORD: ${{ secrets.NEXT_STOP_KEY_PASSWORD }}
+          NEXT_STOP_KEY_ALIAS: ${{ secrets.NEXT_STOP_KEY_ALIAS }}
+        shell: bash
+        run: |
+          if [[ -n "$NEXT_STOP_KEYSTORE_BASE64" && -n "$NEXT_STOP_STORE_PASSWORD" && -n "$NEXT_STOP_KEY_PASSWORD" && -n "$NEXT_STOP_KEY_ALIAS" ]]; then
+            printf '%s' "$NEXT_STOP_KEYSTORE_BASE64" | base64 --decode > android/next-stop-release.jks
+            cat > android/key.properties <<EOF
+          storePassword=$NEXT_STOP_STORE_PASSWORD
+          keyPassword=$NEXT_STOP_KEY_PASSWORD
+          keyAlias=$NEXT_STOP_KEY_ALIAS
+          storeFile=../next-stop-release.jks
+          EOF
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text()
+          if "keystorePropertiesFile" not in s:
+              imports = 'import java.util.Properties\nimport java.io.FileInputStream\n\n'
+              s = imports + s
+              marker = "android {"
+              config = '''val keystoreProperties = Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+
+          '''
+              if marker not in s:
+                  raise SystemExit("Could not find android block in generated Gradle file")
+              s = s.replace(marker, config + marker, 1)
+              marker = "    buildTypes {"
+              signing = '''    signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties.getProperty("keyAlias")
+                      keyPassword = keystoreProperties.getProperty("keyPassword")
+                      storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                      storePassword = keystoreProperties.getProperty("storePassword")
+                  }
+              }
+          '''
+              if marker not in s:
+                  raise SystemExit("Could not find buildTypes block in generated Gradle file")
+              s = s.replace(marker, signing + marker, 1)
+              old = 'signingConfig = signingConfigs.getByName("debug")'
+              if old not in s:
+                  raise SystemExit("Could not find default release signing line in generated Gradle file")
+              s = s.replace(old, 'signingConfig = signingConfigs.getByName("release")', 1)
+              p.write_text(s)
+          PY
+            echo "Persistent release signing configured."
+          else
+            echo "::warning::Persistent signing secrets are not configured. This APK uses the runner's temporary debug key and will NOT be suitable for reliable in-place updates."
+          fi
       - name: Get dependencies
         run: flutter pub get
       - name: Analyze
