@@ -28,6 +28,8 @@ jobs:
           cache: true
       - name: Generate Android project files
         run: flutter create . --platforms=android --project-name next_stop
+      - name: Install icon generation dependency
+        run: python3 -m pip install --user pillow
       - name: Create Next Stop launcher icon assets
         run: |
           mkdir -p assets/icon
