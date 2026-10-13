@@ -194,7 +194,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
     } catch(_){return null;}
   }
   Future<void> loadRoute() async {
-    setState(()=>{loading=true,error=null});
+    setState(() {loading=true;error=null;});
     try {
       final input=<Map<String,dynamic>>[{'id':'warehouse','label':'W','title':'Start / warehouse','address':widget.startAddress,'kind':'warehouse'}];
       for(var i=0;i<widget.stops.length;i++){
@@ -227,7 +227,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
       final sortedStops=ordered.where((p)=>p['kind']=='stop').map((p)=>Map<String,dynamic>.from(p['stop'] as Map)).toList();
       if(!mounted)return;
       setState(() {points=input;line=coordinates;orderedStops=sortedStops;totalKm=(trip['distance'] as num).toDouble()/1000;totalMinutes=((trip['duration'] as num).toDouble()/60).round();loading=false;});
-    }catch(e){if(mounted)setState(()=>{error=e.toString().replaceFirst('Exception: ','') ,loading=false});}
+    }catch(e){if(mounted)setState(() {error=e.toString().replaceFirst('Exception: ','');loading=false;});}
   }
   @override Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(title:const Text('Optimized route')),
@@ -284,13 +284,13 @@ class _StopsPageState extends State<StopsPage> {
       'holidays': TextEditingController(text: existing?['holidays']?.toString() ?? ''),
     };
     String? photoPath=existing?['photoPath']?.toString();
-    Future<void> pickStopPhoto() async { final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:78,maxWidth:1600); if(x!=null)setState((){}); if(x!=null)photoPath=x.path; }
+    Future<void> pickStopPhoto(void Function(void Function()) setD) async { final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:78,maxWidth:1600); if(x!=null)setD(()=>photoPath=x.path); }
     String type = existing?['type']?.toString() ?? 'Fixed';
     bool enabled = existing?['enabled'] != false;
     final ok = await showDialog<bool>(context: context, builder: (ctx)=> StatefulBuilder(builder:(ctx,setD)=>AlertDialog(
       title: Text(isEdit?'Edit stop':'Add stop'),
       content: SizedBox(width: 500, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Align(alignment:Alignment.centerLeft,child:OutlinedButton.icon(onPressed:pickStopPhoto,icon:const Icon(Icons.add_a_photo),label:Text(photoPath==null?'Add shop photo':'Change shop photo'))),
+        Align(alignment:Alignment.centerLeft,child:OutlinedButton.icon(onPressed:()=>pickStopPhoto(setD),icon:const Icon(Icons.add_a_photo),label:Text(photoPath==null?'Add shop photo':'Change shop photo'))),
         if(photoPath!=null&&File(photoPath!).existsSync()) Padding(padding:const EdgeInsets.only(bottom:12),child:Image.file(File(photoPath!),height:120,fit:BoxFit.cover)),
         for (final entry in fields.entries.where((e)=>e.key!='holidays')) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextField(controller: entry.value, keyboardType: entry.key=='packages'?TextInputType.number:TextInputType.text, maxLines: ['notes','smartNote'].contains(entry.key)?2:1, decoration: InputDecoration(labelText: const {'shop':'Shop / customer name','street':'Street name','number':'House number','apartment':'Apartment (optional)','postal':'Postal code','city':'City','country':'Country','packages':'Package count','serial':'Stop / reference number','notes':'Notes / description','hours':'Shop opening hours (e.g. Mon-Fri 09:00-17:00)','closedDates':'Weekly closed days (optional)','smartNote':'Smart closure reminder'}[entry.key],helperText:entry.key=='closedDates'?'Example: Sunday, Monday':null))),
         const SizedBox(height:10),Align(alignment:Alignment.centerLeft,child:Text('Shop holidays',style:Theme.of(ctx).textTheme.titleMedium)),
