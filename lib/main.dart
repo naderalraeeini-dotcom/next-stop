@@ -6,6 +6,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -162,6 +165,91 @@ class _ScanRoutePageState extends State<ScanRoutePage> {
   );
 }
 
+
+class RouteMapPage extends StatefulWidget {
+  final String startAddress;
+  final String endAddress;
+  final List<Map<String,dynamic>> stops;
+  final String Function(Map<String,dynamic>) addressOf;
+  const RouteMapPage({super.key,required this.startAddress,required this.endAddress,required this.stops,required this.addressOf});
+  @override State<RouteMapPage> createState()=>_RouteMapPageState();
+}
+class _RouteMapPageState extends State<RouteMapPage> {
+  bool loading=true;
+  String? error;
+  List<Map<String,dynamic>> points=[];
+  List<LatLng> line=[];
+  List<Map<String,dynamic>> orderedStops=[];
+  double? totalKm;
+  int? totalMinutes;
+  @override void initState(){super.initState();loadRoute();}
+  Future<LatLng?> geocode(String q) async {
+    try {
+      final uri=Uri.https('nominatim.openstreetmap.org','/search',{'q':q,'format':'jsonv2','limit':'1'});
+      final res=await http.get(uri,headers:{'User-Agent':'NextStopDeliveryPlanner/1.0'});
+      if(res.statusCode!=200)return null;
+      final data=jsonDecode(res.body) as List;
+      if(data.isEmpty)return null;
+      return LatLng(double.parse(data.first['lat'].toString()),double.parse(data.first['lon'].toString()));
+    } catch(_){return null;}
+  }
+  Future<void> loadRoute() async {
+    setState(()=>{loading=true,error=null});
+    try {
+      final input=<Map<String,dynamic>>[{'id':'warehouse','label':'W','title':'Start / warehouse','address':widget.startAddress,'kind':'warehouse'}];
+      for(var i=0;i<widget.stops.length;i++){
+        final s=widget.stops[i];
+        input.add({'id':s['id']?.toString()??'$i','label':(s['serial']?.toString().trim().isNotEmpty==true)?s['serial'].toString().trim():'${i+1}','title':(s['shop']??'Stop').toString(),'address':widget.addressOf(s),'kind':'stop','stop':s});
+      }
+      if(widget.endAddress.trim()!=widget.startAddress.trim())input.add({'id':'return','label':'R','title':'Return point','address':widget.endAddress,'kind':'return'});
+      for(var i=0;i<input.length;i++){
+        final p=input[i];
+        final ll=await geocode(p['address'].toString());
+        if(ll==null)throw Exception('Could not locate: ${p['title']} — ${p['address']}');
+        p['latLng']=ll;
+        if(i<input.length-1)await Future<void>.delayed(const Duration(milliseconds:1050));
+      }
+      final coords=input.map((p){final ll=p['latLng'] as LatLng;return '${ll.longitude},${ll.latitude}';}).join(';');
+      final closedLoop=widget.endAddress.trim()==widget.startAddress.trim();
+      final uri=Uri.https('router.project-osrm.org','/trip/v1/driving/$coords',{'roundtrip':closedLoop?'true':'false','source':'first',if(!closedLoop)'destination':'last','overview':'full','geometries':'geojson','steps':'false'});
+      final response=await http.get(uri);
+      if(response.statusCode!=200)throw Exception('The routing service is unavailable (HTTP ${response.statusCode}).');
+      final data=jsonDecode(response.body) as Map<String,dynamic>;
+      if(data['code']!='Ok'||(data['trips'] as List? ?? []).isEmpty)throw Exception('No drivable route could be calculated for these addresses.');
+      final trip=(data['trips'] as List).first as Map<String,dynamic>;
+      final coordinates=(trip['geometry']['coordinates'] as List).map((p)=>LatLng((p[1] as num).toDouble(),(p[0] as num).toDouble())).toList();
+      final waypoints=(data['waypoints'] as List).cast<Map<String,dynamic>>();
+      final ordered=[...input]..sort((a,b){
+        final ai=input.indexOf(a),bi=input.indexOf(b);
+        final aw=(waypoints[ai]['waypoint_index'] as num).toInt(),bw=(waypoints[bi]['waypoint_index'] as num).toInt();
+        return aw.compareTo(bw);
+      });
+      final sortedStops=ordered.where((p)=>p['kind']=='stop').map((p)=>Map<String,dynamic>.from(p['stop'] as Map)).toList();
+      if(!mounted)return;
+      setState(() {points=input;line=coordinates;orderedStops=sortedStops;totalKm=(trip['distance'] as num).toDouble()/1000;totalMinutes=((trip['duration'] as num).toDouble()/60).round();loading=false;});
+    }catch(e){if(mounted)setState(()=>{error=e.toString().replaceFirst('Exception: ','') ,loading=false});}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(title:const Text('Optimized route')),
+    body:loading?const Center(child:Column(mainAxisSize:MainAxisSize.min,children:[CircularProgressIndicator(),SizedBox(height:16),Text('Locating stops and calculating route…'),SizedBox(height:8),Text('For many stops, this can take a little while.',textAlign:TextAlign.center)]))
+    :error!=null?Center(child:Padding(padding:const EdgeInsets.all(24),child:Column(mainAxisSize:MainAxisSize.min,children:[const Icon(Icons.map_outlined,size:54,color:Colors.red),const SizedBox(height:12),Text(error!,textAlign:TextAlign.center),const SizedBox(height:16),FilledButton.icon(onPressed:loadRoute,icon:const Icon(Icons.refresh),label:const Text('Try again'))])))
+    :Column(children:[
+      Padding(padding:const EdgeInsets.all(12),child:Row(children:[Expanded(child:Text('${totalKm!.toStringAsFixed(1)} km estimated • $totalMinutes min driving',style:const TextStyle(fontWeight:FontWeight.bold))),const Icon(Icons.route,color:Colors.green)])),
+      Expanded(child:FlutterMap(options:MapOptions(initialCenter:points.first['latLng'] as LatLng,initialZoom:11,initialCameraFit:CameraFit.coordinates(coordinates:points.map((p)=>p['latLng'] as LatLng).toList(),padding:const EdgeInsets.all(40))),children:[
+        TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',userAgentPackageName:'com.nextstop.app'),
+        if(line.isNotEmpty)PolylineLayer(polylines:[Polyline(points:line,strokeWidth:5,color:Colors.blue)]),
+        MarkerLayer(markers:[for(final p in points)Marker(point:p['latLng'] as LatLng,width:66,height:56,child:Column(children:[Container(padding:const EdgeInsets.symmetric(horizontal:7,vertical:4),decoration:BoxDecoration(color:p['kind']=='warehouse'?Colors.black:(p['kind']=='return'?Colors.orange:Colors.blue),borderRadius:BorderRadius.circular(8),border:Border.all(color:Colors.white,width:1.5)),child:Text(p['label'].toString(),maxLines:1,style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w900,fontSize:12))),const Icon(Icons.location_on,color:Colors.red,size:22)]))]),
+        const RichAttributionWidget(attributions:[TextSourceAttribution('© OpenStreetMap contributors')])
+      ])),
+      SizedBox(height:200,child:ListView(padding:const EdgeInsets.all(12),children:[
+        const Text('Suggested stop order',style:TextStyle(fontWeight:FontWeight.bold,fontSize:16)),
+        for(var i=0;i<orderedStops.length;i++)ListTile(dense:true,leading:CircleAvatar(child:Text('${i+1}')),title:Text((orderedStops[i]['serial']?.toString().trim().isNotEmpty==true)?orderedStops[i]['serial'].toString():(orderedStops[i]['shop']??'Stop').toString()),subtitle:Text(widget.addressOf(orderedStops[i])),trailing:Text((orderedStops[i]['hours']??'').toString(),style:const TextStyle(fontSize:11))),
+        const Text('Route order is optimized by road distance/time. Opening hours are shown for review but are not yet used as hard scheduling constraints.',style:TextStyle(fontSize:12,color:Colors.grey))
+      ]))
+    ])
+  );
+}
+
 class StopsPage extends StatefulWidget {
   final Map<String,dynamic> route;
   final Future<void> Function() onChanged;
@@ -295,10 +383,8 @@ class _StopsPageState extends State<StopsPage> {
     if(chosen.isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Select today’s stops first.')));return;}
     final start=(widget.route['warehouse']??'').toString().trim();
     final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString().trim();
-    // Only today's explicitly selected, enabled and unfinished stops are sent as waypoints.
-    // The warehouse is the origin, never a waypoint, so Google Maps can optimize the stop order.
-    final waypoints=chosen.map((s)=>address(s)).where((a)=>a.trim().isNotEmpty).toList();
-    await navigateAddress(end.isEmpty?waypoints.last:end,origin:start,waypoints:waypoints.length>1?waypoints:const []);
+    if(start.isEmpty||end.isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Set both the warehouse and return address first.')));return;}
+    await Navigator.push(context,MaterialPageRoute(builder:(_)=>RouteMapPage(startAddress:start,endAddress:end,stops:chosen.map((s)=>Map<String,dynamic>.from(s)).toList(),addressOf:address)));
   }
   Future<void> finishRoute() async {
     final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString();
