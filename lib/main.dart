@@ -5,6 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -71,7 +78,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
+    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Fuel stations', onPressed: openFuelStations, icon: const Icon(Icons.local_gas_station)), IconButton(tooltip: 'Import route file', onPressed: importRouteFile, icon: const Icon(Icons.file_open)), IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
     floatingActionButton: FloatingActionButton.extended(onPressed: addRoute, backgroundColor: orange, foregroundColor: Colors.white, icon: const Icon(Icons.add), label: const Text('New route')),
     body: loading ? const Center(child: CircularProgressIndicator()) : routes.isEmpty
       ? Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.route, size: 68, color: blue), const SizedBox(height: 16), const Text('Plan your delivery day', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), const Text('Create a route, add its stops, and keep your route data saved on this phone.', textAlign: TextAlign.center), const SizedBox(height: 18), FilledButton.icon(onPressed: addRoute, icon: const Icon(Icons.add), label: const Text('Create first route'))])))
@@ -89,22 +96,109 @@ class _RoutesPageState extends State<RoutesPage> {
       }),
   );
 
-  Future<void> shareRoute(Map<String,dynamic> route) async {
-    final jsonPayload = jsonEncode({'app':'next-stop','version':1,'route':route});
-    // Compress complete routes before encoding them for QR; large routes often shrink substantially.
-    final payload = 'NSZ1:' + base64Url.encode(gzip.encode(utf8.encode(jsonPayload)));
-    if (payload.length > 2500) {
-      if (mounted) showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Route too large'),content:const Text('This route is still too large for a single QR code, even after compression. Use a smaller route for QR sharing; full-route file export/import is the reliable next step.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('OK'))]));
-      return;
+  Future<void> openFuelStations() async { final uri=Uri.https('www.google.com','/maps/search/',{'api':'1','query':'petrol stations near me'}); if(!await launchUrl(uri,mode:LaunchMode.externalApplication)&&mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open fuel stations map'))); }
+
+  Future<Map<String,dynamic>> _routeWithPhotos(Map<String,dynamic> route) async {
+    final copy=Map<String,dynamic>.from(jsonDecode(jsonEncode(route)) as Map);
+    Future<String?> encodePhoto(dynamic path) async {
+      if(path==null||path.toString().isEmpty)return null;
+      try { final file=File(path.toString()); if(!await file.exists())return null; return base64Encode(await file.readAsBytes()); } catch (_) { return null; }
     }
-    if (!mounted) return;
-    showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Share route: ${route['name']}'),content:Column(mainAxisSize:MainAxisSize.min,children:[const Text('Ask the other person to open Next Stop and scan this code.'),const SizedBox(height:12),QrImageView(data:payload,size:245),const SizedBox(height:8),const Text('The receiving phone will ask for confirmation.',textAlign:TextAlign.center)]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+    final stops=<Map<String,dynamic>>[];
+    for(final raw in (copy['stops'] as List? ?? [])){
+      final s=Map<String,dynamic>.from(raw as Map);
+      final data=await encodePhoto(s['photoPath']);
+      if(data!=null)s['photoDataBase64']=data;
+      s.remove('photoPath');
+      stops.add(s);
+    }
+    copy['stops']=stops;
+    final reports=<Map<String,dynamic>>[];
+    for(final raw in (copy['reports'] as List? ?? [])){
+      final r=Map<String,dynamic>.from(raw as Map);
+      final images=<Map<String,String>>[];
+      for(final path in (r['photos'] as List? ?? [])){final data=await encodePhoto(path);if(data!=null)images.add({'base64':data,'name':'report_photo.jpg'});}
+      r['photos']=images;
+      reports.add(r);
+    }
+    if(copy.containsKey('reports'))copy['reports']=reports;
+    return copy;
   }
+
+  Future<Map<String,dynamic>> _restoreRoutePhotos(Map<String,dynamic> incoming) async {
+    final copy=Map<String,dynamic>.from(incoming);
+    final dir=await getApplicationDocumentsDirectory();
+    Future<String?> savePhoto(dynamic data,String name) async {
+      if(data==null||data.toString().isEmpty)return null;
+      try {final bytes=base64Decode(data.toString());final safe=name.replaceAll(RegExp(r'[^a-zA-Z0-9_.-]'),'_');final file=File('${dir.path}/nextstop_${DateTime.now().microsecondsSinceEpoch}_$safe');await file.writeAsBytes(bytes,flush:true);return file.path;}catch(_){return null;}
+    }
+    final stops=<Map<String,dynamic>>[];
+    for(final raw in (copy['stops'] as List? ?? [])){
+      final s=Map<String,dynamic>.from(raw as Map);
+      final path=await savePhoto(s.remove('photoDataBase64'),'shop.jpg');
+      if(path!=null)s['photoPath']=path;
+      stops.add(s);
+    }
+    copy['stops']=stops;
+    if(copy['reports'] is List){
+      final reports=<Map<String,dynamic>>[];
+      for(final raw in (copy['reports'] as List)){
+        final r=Map<String,dynamic>.from(raw as Map);
+        final photos=<String>[];
+        for(final rawPhoto in (r['photos'] as List? ?? [])){
+          if(rawPhoto is Map){final path=await savePhoto(rawPhoto['base64'],rawPhoto['name']?.toString()??'report.jpg');if(path!=null)photos.add(path);}
+          else if(rawPhoto is String)photos.add(rawPhoto);
+        }
+        r['photos']=photos;reports.add(r);
+      }
+      copy['reports']=reports;
+    }
+    return copy;
+  }
+
+  Future<void> shareRoute(Map<String,dynamic> route) async {
+    try {
+      final portable=await _routeWithPhotos(route);
+      final payload=jsonEncode({'app':'next-stop','version':2,'route':portable});
+      final safeName=(route['name']?.toString()??'route').replaceAll(RegExp(r'[^a-zA-Z0-9_-]'),'_');
+      final dir=await getTemporaryDirectory();
+      final file=File('${dir.path}/NextStop_$safeName.json');
+      await file.writeAsString(payload,flush:true);
+      await Share.shareXFiles([XFile(file.path,mimeType:'application/json')],text:'Next Stop route: ${route['name']}. On the other phone, open Next Stop and choose Import route file.');
+    } catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not share route file: $e')));
+    }
+  }
+
+  Future<void> importRouteFile() async {
+    try {
+      final picked=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['json','nextstop'],withData:true);
+      if(picked==null||picked.files.isEmpty)return;
+      final file=picked.files.single;
+      final bytes=file.bytes??(file.path!=null?await File(file.path!).readAsBytes():null);
+      if(bytes==null)throw const FormatException('The selected file could not be read.');
+      final data=jsonDecode(utf8.decode(bytes)) as Map<String,dynamic>;
+      if(data['app']!='next-stop'||data['route'] is! Map)throw const FormatException('Not a Next Stop route file.');
+      var incoming=await _restoreRoutePhotos(Map<String,dynamic>.from(data['route'] as Map));
+      final incomingStops=(incoming['stops'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)).toList();
+      incoming['id']=DateTime.now().microsecondsSinceEpoch.toString();
+      incoming['name']='${incoming['name']??'Imported route'} (imported)';
+      incoming['stops']=incomingStops;
+      incoming['created']=DateTime.now().toIso8601String();
+      incoming['dailyStopIds']=<String>[];
+      incoming['tripDay']=DateTime.now().toIso8601String().substring(0,10);
+      incoming['tripStarted']=false;
+      final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Import route file?'),content:Text('Add "${incoming['name']}" with ${incomingStops.length} stops? Existing routes will not change.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Import'))]));
+      if(yes==true&&mounted){setState(()=>routes.add(incoming));await save();ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Route and available photos imported successfully.')));}
+    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not import route file: $e')));}
+  }
+
   Future<void> scanRoute() async {
     final scanned = await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanRoutePage()));
     if (scanned == null || !mounted) return;
     try {
-      final decodedText = scanned.startsWith('NSZ1:') ? utf8.decode(gzip.decode(base64Url.decode(scanned.substring(5)))) : scanned;
+      final assembled = scanned.startsWith('NSC1|') ? scanned.substring(5) : scanned;
+      final decodedText = assembled.startsWith('NSZ1:') ? utf8.decode(gzip.decode(base64Url.decode(assembled.substring(5)))) : assembled;
       final data = jsonDecode(decodedText) as Map<String,dynamic>;
       if (data['app'] != 'next-stop' || data['route'] is! Map) throw const FormatException();
       final incoming = Map<String,dynamic>.from(data['route'] as Map);
@@ -135,17 +229,109 @@ class ScanRoutePage extends StatefulWidget {
 }
 class _ScanRoutePageState extends State<ScanRoutePage> {
   bool handled = false;
+  final Map<String,String> _chunks={};
+  int? _total;
+  String? _session;
+  bool _waitingForNext=false;
   @override
   Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(title:const Text('Scan route QR code')),
     body:Column(children:[
-      const Padding(padding:EdgeInsets.all(18),child:Text('Point the camera at a Next Stop route QR code. Android will request camera permission if needed.',textAlign:TextAlign.center)),
+      Padding(padding:const EdgeInsets.all(18),child:Text(_total==null?'Point the camera at each QR page in order. The route imports after the final page.':'Scanned ${_chunks.length} of $_total QR pages. ${_waitingForNext?'Tap Continue, then scan the next page.':'Keep the camera on QR ${_chunks.length+1}.'}',textAlign:TextAlign.center)),
+      if(_waitingForNext) Padding(padding:const EdgeInsets.only(bottom:8),child:FilledButton(onPressed:()=>setState(()=>_waitingForNext=false),child:const Text('Continue scanning'))),
       Expanded(child:Padding(padding:const EdgeInsets.all(16),child:ClipRRect(borderRadius:BorderRadius.circular(18),child:MobileScanner(onDetect:(capture){
-        if(handled)return;
+        if(handled||_waitingForNext)return;
         final value=capture.barcodes.isEmpty?null:capture.barcodes.first.rawValue;
-        if(value!=null&&value.isNotEmpty){handled=true;Navigator.pop(context,value);}
+        if(value==null||value.isEmpty)return;
+        if(value.startsWith('NSC1:')){final parts=value.split(':');if(parts.length<5)return;final session=parts[1];final index=int.tryParse(parts[2]);final total=int.tryParse(parts[3]);if(index==null||total==null||index<1||index>total)return;if(_session!=null&&_session!=session){_chunks.clear();} _session=session;_total=total;_chunks[index.toString()]=parts.sublist(4).join(':');if(_chunks.length==total&&List.generate(total,(i)=>(i+1).toString()).every(_chunks.containsKey)){handled=true;Navigator.pop(context,'NSC1|'+List.generate(total,(i)=>_chunks[(i+1).toString()]!).join());}else setState(()=>_waitingForNext=true);
+        }else{handled=true;Navigator.pop(context,value);}
       })))),
     ]),
+  );
+}
+
+
+class RouteMapPage extends StatefulWidget {
+  final String startAddress;
+  final String endAddress;
+  final List<Map<String,dynamic>> stops;
+  final String Function(Map<String,dynamic>) addressOf;
+  const RouteMapPage({super.key,required this.startAddress,required this.endAddress,required this.stops,required this.addressOf});
+  @override State<RouteMapPage> createState()=>_RouteMapPageState();
+}
+class _RouteMapPageState extends State<RouteMapPage> {
+  bool loading=true;
+  String? error;
+  List<Map<String,dynamic>> points=[];
+  List<LatLng> line=[];
+  List<Map<String,dynamic>> orderedStops=[];
+  double? totalKm;
+  int? totalMinutes;
+  @override void initState(){super.initState();loadRoute();}
+  Future<LatLng?> geocode(String q) async {
+    try {
+      final uri=Uri.https('nominatim.openstreetmap.org','/search',{'q':q,'format':'jsonv2','limit':'1'});
+      final res=await http.get(uri,headers:{'User-Agent':'NextStopDeliveryPlanner/1.0'});
+      if(res.statusCode!=200)return null;
+      final data=jsonDecode(res.body) as List;
+      if(data.isEmpty)return null;
+      return LatLng(double.parse(data.first['lat'].toString()),double.parse(data.first['lon'].toString()));
+    } catch(_){return null;}
+  }
+  Future<void> loadRoute() async {
+    setState(() {loading=true;error=null;});
+    try {
+      final input=<Map<String,dynamic>>[{'id':'warehouse','label':'W','title':'Start / warehouse','address':widget.startAddress,'kind':'warehouse'}];
+      for(var i=0;i<widget.stops.length;i++){
+        final s=widget.stops[i];
+        input.add({'id':s['id']?.toString()??'$i','label':(s['serial']?.toString().trim().isNotEmpty==true)?s['serial'].toString().trim():'${i+1}','title':(s['shop']??'Stop').toString(),'address':widget.addressOf(s),'kind':'stop','stop':s});
+      }
+      if(widget.endAddress.trim()!=widget.startAddress.trim())input.add({'id':'return','label':'R','title':'Return point','address':widget.endAddress,'kind':'return'});
+      for(var i=0;i<input.length;i++){
+        final p=input[i];
+        final ll=await geocode(p['address'].toString());
+        if(ll==null)throw Exception('Could not locate: ${p['title']} — ${p['address']}');
+        p['latLng']=ll;
+        if(i<input.length-1)await Future<void>.delayed(const Duration(milliseconds:1050));
+      }
+      final coords=input.map((p){final ll=p['latLng'] as LatLng;return '${ll.longitude},${ll.latitude}';}).join(';');
+      final closedLoop=widget.endAddress.trim()==widget.startAddress.trim();
+      final uri=Uri.https('router.project-osrm.org','/trip/v1/driving/$coords',{'roundtrip':closedLoop?'true':'false','source':'first',if(!closedLoop)'destination':'last','overview':'full','geometries':'geojson','steps':'false'});
+      final response=await http.get(uri);
+      if(response.statusCode!=200)throw Exception('The routing service is unavailable (HTTP ${response.statusCode}).');
+      final data=jsonDecode(response.body) as Map<String,dynamic>;
+      if(data['code']!='Ok'||(data['trips'] as List? ?? []).isEmpty)throw Exception('No drivable route could be calculated for these addresses.');
+      final trip=(data['trips'] as List).first as Map<String,dynamic>;
+      final coordinates=(trip['geometry']['coordinates'] as List).map((p)=>LatLng((p[1] as num).toDouble(),(p[0] as num).toDouble())).toList();
+      final waypoints=(data['waypoints'] as List).cast<Map<String,dynamic>>();
+      final ordered=[...input]..sort((a,b){
+        final ai=input.indexOf(a),bi=input.indexOf(b);
+        final aw=(waypoints[ai]['waypoint_index'] as num).toInt(),bw=(waypoints[bi]['waypoint_index'] as num).toInt();
+        return aw.compareTo(bw);
+      });
+      final sortedStops=ordered.where((p)=>p['kind']=='stop').map((p)=>Map<String,dynamic>.from(p['stop'] as Map)).toList();
+      if(!mounted)return;
+      setState(() {points=input;line=coordinates;orderedStops=sortedStops;totalKm=(trip['distance'] as num).toDouble()/1000;totalMinutes=((trip['duration'] as num).toDouble()/60).round();loading=false;});
+    }catch(e){if(mounted)setState(() {error=e.toString().replaceFirst('Exception: ','');loading=false;});}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(title:const Text('Optimized route')),
+    body:loading?const Center(child:Column(mainAxisSize:MainAxisSize.min,children:[CircularProgressIndicator(),SizedBox(height:16),Text('Locating stops and calculating route…'),SizedBox(height:8),Text('For many stops, this can take a little while.',textAlign:TextAlign.center)]))
+    :error!=null?Center(child:Padding(padding:const EdgeInsets.all(24),child:Column(mainAxisSize:MainAxisSize.min,children:[const Icon(Icons.map_outlined,size:54,color:Colors.red),const SizedBox(height:12),Text(error!,textAlign:TextAlign.center),const SizedBox(height:16),FilledButton.icon(onPressed:loadRoute,icon:const Icon(Icons.refresh),label:const Text('Try again'))])))
+    :Column(children:[
+      Padding(padding:const EdgeInsets.all(12),child:Row(children:[Expanded(child:Text('${totalKm!.toStringAsFixed(1)} km estimated • $totalMinutes min driving',style:const TextStyle(fontWeight:FontWeight.bold))),const Icon(Icons.route,color:Colors.green)])),
+      Expanded(child:FlutterMap(options:MapOptions(initialCenter:points.first['latLng'] as LatLng,initialZoom:11,initialCameraFit:CameraFit.coordinates(coordinates:points.map((p)=>p['latLng'] as LatLng).toList(),padding:const EdgeInsets.all(40))),children:[
+        TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',userAgentPackageName:'com.nextstop.app'),
+        if(line.isNotEmpty)PolylineLayer(polylines:[Polyline(points:line,strokeWidth:5,color:Colors.blue)]),
+        MarkerLayer(markers:[for(final p in points)Marker(point:p['latLng'] as LatLng,width:66,height:56,child:Column(children:[Container(padding:const EdgeInsets.symmetric(horizontal:7,vertical:4),decoration:BoxDecoration(color:p['kind']=='warehouse'?Colors.black:(p['kind']=='return'?Colors.orange:Colors.blue),borderRadius:BorderRadius.circular(8),border:Border.all(color:Colors.white,width:1.5)),child:Text(p['label'].toString(),maxLines:1,style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w900,fontSize:12))),const Icon(Icons.location_on,color:Colors.red,size:22)]))]),
+        const RichAttributionWidget(attributions:[TextSourceAttribution('© OpenStreetMap contributors')])
+      ])),
+      SizedBox(height:200,child:ListView(padding:const EdgeInsets.all(12),children:[
+        const Text('Suggested stop order',style:TextStyle(fontWeight:FontWeight.bold,fontSize:16)),
+        for(var i=0;i<orderedStops.length;i++)ListTile(dense:true,leading:CircleAvatar(child:Text('${i+1}')),title:Text((orderedStops[i]['serial']?.toString().trim().isNotEmpty==true)?orderedStops[i]['serial'].toString():(orderedStops[i]['shop']??'Stop').toString()),subtitle:Text(widget.addressOf(orderedStops[i])),trailing:Text((orderedStops[i]['hours']??'').toString(),style:const TextStyle(fontSize:11))),
+        const Text('Route order is optimized by road distance/time. Opening hours are shown for review but are not yet used as hard scheduling constraints.',style:TextStyle(fontSize:12,color:Colors.grey))
+      ]))
+    ])
   );
 }
 
@@ -182,11 +368,15 @@ class _StopsPageState extends State<StopsPage> {
       'smartNote': TextEditingController(text: existing?['smartNote']?.toString() ?? ''),
       'holidays': TextEditingController(text: existing?['holidays']?.toString() ?? ''),
     };
+    String? photoPath=existing?['photoPath']?.toString();
+    Future<void> pickStopPhoto(void Function(void Function()) setD) async { final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:78,maxWidth:1600); if(x!=null)setD(()=>photoPath=x.path); }
     String type = existing?['type']?.toString() ?? 'Fixed';
     bool enabled = existing?['enabled'] != false;
     final ok = await showDialog<bool>(context: context, builder: (ctx)=> StatefulBuilder(builder:(ctx,setD)=>AlertDialog(
       title: Text(isEdit?'Edit stop':'Add stop'),
       content: SizedBox(width: 500, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Align(alignment:Alignment.centerLeft,child:OutlinedButton.icon(onPressed:()=>pickStopPhoto(setD),icon:const Icon(Icons.add_a_photo),label:Text(photoPath==null?'Add shop photo':'Change shop photo'))),
+        if(photoPath!=null&&File(photoPath!).existsSync()) Padding(padding:const EdgeInsets.only(bottom:12),child:Image.file(File(photoPath!),height:120,fit:BoxFit.cover)),
         for (final entry in fields.entries.where((e)=>e.key!='holidays')) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextField(controller: entry.value, keyboardType: entry.key=='packages'?TextInputType.number:TextInputType.text, maxLines: ['notes','smartNote'].contains(entry.key)?2:1, decoration: InputDecoration(labelText: const {'shop':'Shop / customer name','street':'Street name','number':'House number','apartment':'Apartment (optional)','postal':'Postal code','city':'City','country':'Country','packages':'Package count','serial':'Stop / reference number','notes':'Notes / description','hours':'Shop opening hours (e.g. Mon-Fri 09:00-17:00)','closedDates':'Weekly closed days (optional)','smartNote':'Smart closure reminder'}[entry.key],helperText:entry.key=='closedDates'?'Example: Sunday, Monday':null))),
         const SizedBox(height:10),Align(alignment:Alignment.centerLeft,child:Text('Shop holidays',style:Theme.of(ctx).textTheme.titleMedium)),
         if(fields['holidays']!.text.trim().isNotEmpty) ...fields['holidays']!.text.split('\n').where((line)=>line.trim().isNotEmpty).map((line){final p=line.split('|');return ListTile(dense:true,contentPadding:EdgeInsets.zero,leading:const Icon(Icons.event_busy,color:Colors.red),title:Text(p.first),subtitle:p.length>1&&p[1].isNotEmpty?Text(p.sublist(1).join('|')):null,trailing:IconButton(icon:const Icon(Icons.delete_outline),onPressed:()=>setD(()=>fields['holidays']!.text=fields['holidays']!.text.split('\n').where((x)=>x!=line).join('\n'))));}),
@@ -197,7 +387,7 @@ class _StopsPageState extends State<StopsPage> {
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:Text(isEdit?'Save':'Add stop'))],
     )));
     if(ok==true && fields['street']!.text.trim().isNotEmpty && fields['city']!.text.trim().isNotEmpty) {
-      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':existing?['done']??false,'created':existing?['created']??DateTime.now().toIso8601String(),'id':existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()};
+      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'photoPath':photoPath, 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':existing?['done']??false,'created':existing?['created']??DateTime.now().toIso8601String(),'id':existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()};
       final items=stops;
       if(isEdit){ final i=items.indexWhere((s)=>s['id']==existing['id']); if(i>=0)items[i]=data; } else {items.add(data);}
       await persist(items);
@@ -221,9 +411,9 @@ class _StopsPageState extends State<StopsPage> {
     final items=allItems.where((s)=>ids.contains(s['id'].toString())).toList(); final active=items.where((s)=>s['enabled']!=false && s['done']!=true).length;
     return Scaffold(
       appBar:AppBar(title:Text(widget.route['name']?.toString()??'Route'), actions:[IconButton(tooltip:'Edit route warehouse',icon:const Icon(Icons.edit_location_alt),onPressed:()=>editWarehouse())]),
-      floatingActionButton:FloatingActionButton.extended(onPressed:()=>addStop(),backgroundColor:orange,foregroundColor:Colors.white,icon:const Icon(Icons.add_location_alt),label:const Text('Add stop')),
+      floatingActionButton:null,
       body:Column(children:[
-        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
+        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
         Expanded(child:items.isEmpty?const Center(child:Text('No stops yet. Add your first stop.')):ReorderableListView.builder(padding:const EdgeInsets.all(12),itemCount:items.length,onReorder:(oldIndex,newIndex) async {final list=stops; if(newIndex>oldIndex)newIndex--; final item=list.removeAt(oldIndex); list.insert(newIndex,item); await persist(list);},itemBuilder:(ctx,i){
           final s=items[i]; final done=s['done']==true; final guest=s['type']=='Guest';
           final today=DateTime.now().toIso8601String().substring(0,10);
@@ -245,6 +435,12 @@ class _StopsPageState extends State<StopsPage> {
         })),
       ]),
     );
+  }
+  Future<void> openProblemReport() async {
+    final kinds=['Vehicle: Oil change','Vehicle: Brakes','Vehicle: Tires','Vehicle: Lights','Vehicle: Engine coolant / water','Vehicle: Engine fault','Accident','Route problem','Other'];
+    String kind=kinds.first;final notes=TextEditingController();final photos=<String>[];
+    final yes=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text('Report a problem'),content:SizedBox(width:480,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[DropdownButtonFormField<String>(value:kind,items:[for(final k in kinds)DropdownMenuItem(value:k,child:Text(k))],onChanged:(v)=>setD(()=>kind=v??kinds.first),decoration:const InputDecoration(labelText:'Problem type')),const SizedBox(height:8),TextField(controller:notes,maxLines:4,decoration:const InputDecoration(labelText:'Details / vehicle or route issue')),const SizedBox(height:8),OutlinedButton.icon(onPressed:()async{final xs=await ImagePicker().pickMultiImage(imageQuality:75,maxWidth:1600);setD(()=>photos.addAll(xs.map((x)=>x.path)));},icon:const Icon(Icons.photo_library),label:Text('Add photos (${photos.length})')),for(final p in photos)if(File(p).existsSync())Padding(padding:const EdgeInsets.only(top:6),child:Image.file(File(p),height:70,fit:BoxFit.cover)),if(kind=='Accident')const Text('For emergencies, contact emergency services first.',style:TextStyle(color:Colors.red))]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Save report'))])));
+    if(yes==true){final reports=List<Map<String,dynamic>>.from((widget.route['reports'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)));reports.add({'id':DateTime.now().microsecondsSinceEpoch.toString(),'type':kind,'notes':notes.text.trim(),'photos':photos,'created':DateTime.now().toIso8601String(),'status':'Open'});widget.route['reports']=reports;await widget.onChanged();if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Problem report saved on this phone.')));}
   }
   Future<void> editWarehouse() async {
     final c=TextEditingController(text:widget.route['warehouse']?.toString()??'');
@@ -272,10 +468,8 @@ class _StopsPageState extends State<StopsPage> {
     if(chosen.isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Select today’s stops first.')));return;}
     final start=(widget.route['warehouse']??'').toString().trim();
     final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString().trim();
-    // Only today's explicitly selected, enabled and unfinished stops are sent as waypoints.
-    // The warehouse is the origin, never a waypoint, so Google Maps can optimize the stop order.
-    final waypoints=chosen.map((s)=>address(s)).where((a)=>a.trim().isNotEmpty).toList();
-    await navigateAddress(end.isEmpty?waypoints.last:end,origin:start,waypoints:waypoints.length>1?waypoints:const []);
+    if(start.isEmpty||end.isEmpty){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Set both the warehouse and return address first.')));return;}
+    await Navigator.push(context,MaterialPageRoute(builder:(_)=>RouteMapPage(startAddress:start,endAddress:end,stops:chosen.map((s)=>Map<String,dynamic>.from(s)).toList(),addressOf:address)));
   }
   Future<void> finishRoute() async {
     final end=(widget.route['endAddress']??widget.route['warehouse']??'').toString();
@@ -294,6 +488,7 @@ class _StopsPageState extends State<StopsPage> {
   void showDetails(Map<String,dynamic> s,int i) {
     showModalBottomSheet(context:context,showDragHandle:true,isScrollControlled:true,builder:(ctx)=>Padding(padding:const EdgeInsets.all(20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[
       Text('Stop '+(i+1).toString()+': '+(s['shop']??'').toString(),style:Theme.of(context).textTheme.titleLarge),const SizedBox(height:12),
+      if((s['photoPath']?.toString().isNotEmpty??false)&&File(s['photoPath'].toString()).existsSync())ClipRRect(borderRadius:BorderRadius.circular(14),child:Image.file(File(s['photoPath'].toString()),width:double.infinity,fit:BoxFit.contain)),
       for(final pair in <String,String>{'Address':address(s),'Packages':s['packages'].toString(),'Type':s['type'].toString(),'Opening hours':(s['hours']??'').toString(),'Weekly closed days':(s['closedDates']??'').toString(),'Shop holidays':(s['holidays']??'').toString().replaceAll('\n','; '),'Smart reminder':(s['smartNote']??'').toString(),'Reference':(s['serial']??'').toString(),'Notes':(s['notes']??'').toString(),'Created':(s['created']??'').toString(),'Status':s['done']==true?'Completed':'Pending'}.entries) Padding(padding:const EdgeInsets.symmetric(vertical:5),child:Text(pair.key+': '+(pair.value.isEmpty?'—':pair.value))),
       const SizedBox(height:16),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
     ]))));

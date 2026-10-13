@@ -3,6 +3,8 @@ name: Build Next Stop APK
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -26,11 +28,138 @@ jobs:
           cache: true
       - name: Generate Android project files
         run: flutter create . --platforms=android --project-name next_stop
+      - name: Set Android compile SDK to 36 for current plugins
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/build.gradle.kts')
+          s = p.read_text()
+          old = 'compileSdk = flutter.compileSdkVersion'
+          if old in s:
+              s = s.replace(old, 'compileSdk = 36', 1)
+          elif 'compileSdk = 36' not in s:
+              raise SystemExit('Could not locate compileSdk setting in generated Gradle file')
+          p.write_text(s)
+          PY
+      - name: Install icon generation dependency
+        run: python3 -m pip install --user pillow
+      - name: Create Next Stop launcher icon assets
+        run: |
+          mkdir -p assets/icon
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          import math
+          size=1024
+          navy=(7,26,66,255)
+          orange=(255,151,0,255)
+          white=(255,255,255,255)
+          def bezier(p0,p1,p2,p3,n=100):
+              out=[]
+              for i in range(n+1):
+                  t=i/n; u=1-t
+                  x=u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0]
+                  y=u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1]
+                  out.append((int(x),int(y)))
+              return out
+          route=[]
+          route += bezier((310,820),(480,790),(800,790),(760,650),60)
+          route += bezier((760,650),(730,550),(430,620),(450,490),60)[1:]
+          route += bezier((450,490),(470,390),(750,480),(730,370),60)[1:]
+          def draw_icon(path, transparent=False):
+              im=Image.new('RGBA',(size,size),(0,0,0,0) if transparent else navy)
+              d=ImageDraw.Draw(im)
+              d.line(route,fill=orange,width=62,joint='curve')
+              for x,y in [(310,820),(450,490),(730,370)]:
+                  d.ellipse((x-54,y-54,x+54,y+54),fill=orange)
+                  d.ellipse((x-29,y-29,x+29,y+29),fill=white)
+              # Destination pin with dark center.
+              cx,cy=735,235
+              d.ellipse((cx-105,cy-105,cx+105,cy+105),fill=orange)
+              d.polygon([(cx-83,cy+42),(cx+83,cy+42),(cx,cy+174)],fill=orange)
+              d.ellipse((cx-43,cy-43,cx+43,cy+43),fill=navy if not transparent else (7,26,66,255))
+              im.save(path)
+          draw_icon('assets/icon/next_stop.png',False)
+          draw_icon('assets/icon/next_stop_foreground.png',True)
+          PY
       - name: Get dependencies
         run: flutter pub get
+      - name: Set Android compile SDK 36 for Flutter plugin modules
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path.home() / '.pub-cache' / 'hosted' / 'pub.dev'
+          changed = []
+          if root.exists():
+              for p in root.rglob('build.gradle*'):
+                  if 'android' not in p.parts:
+                      continue
+                  try:
+                      s = p.read_text()
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  updated = re.sub(r'(?m)^(\s*compileSdkVersion\s*(?:=\s*)?).+$', r'\g<1>36', s)
+                  updated = re.sub(r'(?m)^(\s*compileSdk\s*(?:=\s*)?).+$', r'\g<1>36', updated)
+                  if updated != s:
+                      p.write_text(updated)
+                      changed.append(str(p))
+          print('Updated plugin Gradle compile SDK settings:')
+          print('\n'.join(changed) if changed else 'No plugin compileSdk settings changed')
+          picker = root / 'file_picker-8.1.4' / 'android'
+          for p in picker.glob('build.gradle*'):
+              print(f'--- {p} ---')
+              for line in p.read_text().splitlines():
+                  if 'compileSdk' in line:
+                      print(line)
+          PY
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
       - name: Analyze
         run: flutter analyze lib --no-fatal-infos --no-fatal-warnings
+      - name: Configure persistent release signing when secrets are set
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "Persistent signing secrets are not configured; this APK will use the CI default signing key and may not update an existing installation."
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/next-stop-release.jks
+          cat > android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=next-stop-release.jks
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('android/app/build.gradle.kts')
+          s=p.read_text()
+          marker='android {'
+          if marker not in s:
+              raise SystemExit('Could not locate android block in generated Gradle file')
+          signing='''android {
+              signingConfigs {
+                  create("release") {
+                      keyAlias = providers.gradleProperty("unused").orNull ?: System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                      storeFile = file("next-stop-release.jks")
+                      storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                  }
+              }
+          '''
+          s=s.replace(marker, signing, 1)
+          s=s.replace('signingConfig = signingConfigs.getByName("debug")','signingConfig = signingConfigs.getByName("release")')
+          p.write_text(s)
+          PY
       - name: Build release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: flutter build apk --release
       - name: Upload APK
         uses: actions/upload-artifact@v4
