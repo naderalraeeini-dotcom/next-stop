@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -71,7 +72,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
+    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Export backup', onPressed: exportBackup, icon: const Icon(Icons.backup_outlined)), IconButton(tooltip: 'Import backup', onPressed: importBackup, icon: const Icon(Icons.restore)), IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
     floatingActionButton: FloatingActionButton.extended(onPressed: addRoute, backgroundColor: orange, foregroundColor: Colors.white, icon: const Icon(Icons.add), label: const Text('New route')),
     body: loading ? const Center(child: CircularProgressIndicator()) : routes.isEmpty
       ? Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.route, size: 68, color: blue), const SizedBox(height: 16), const Text('Plan your delivery day', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), const Text('Create a route, add its stops, and keep your route data saved on this phone.', textAlign: TextAlign.center), const SizedBox(height: 18), FilledButton.icon(onPressed: addRoute, icon: const Icon(Icons.add), label: const Text('Create first route'))])))
@@ -88,6 +89,123 @@ class _RoutesPageState extends State<RoutesPage> {
         ));
       }),
   );
+
+  Future<void> exportBackup() async {
+    final backup = jsonEncode({
+      'app': 'next-stop-backup',
+      'version': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'routes': routes,
+    });
+    await Clipboard.setData(ClipboardData(text: backup));
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Backup copied'),
+        content: SelectableText(
+          'A complete text backup of your routes and stop details was copied to the clipboard. Save it in a private note or file before changing phones or reinstalling. Photos stored only on this phone may not transfer. Backup size: ${backup.length} characters.',
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+      ),
+    );
+  }
+
+  Future<void> importBackup() async {
+    final controller = TextEditingController();
+    final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
+    if (clipboard?.text != null && clipboard!.text!.contains('next-stop-backup')) {
+      controller.text = clipboard.text!;
+    }
+    if (!mounted) return;
+    final confirmedText = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import backup'),
+        content: SizedBox(
+          width: 500,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Paste the backup text here. Imported routes will be added; existing routes will not be replaced.'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  minLines: 5,
+                  maxLines: 10,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'Paste Next Stop backup text',
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null) controller.text = data!.text!;
+                    },
+                    icon: const Icon(Icons.content_paste),
+                    label: const Text('Paste clipboard'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Validate backup')),
+        ],
+      ),
+    );
+    if (confirmedText == null || confirmedText.trim().isEmpty || !mounted) return;
+    try {
+      final decoded = jsonDecode(confirmedText) as Map<String, dynamic>;
+      if (decoded['app'] != 'next-stop-backup' || decoded['routes'] is! List) {
+        throw const FormatException('Not a Next Stop backup');
+      }
+      final incoming = (decoded['routes'] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirm import'),
+          content: Text('Add ${incoming.length} routes from this backup? Existing routes will remain unchanged.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Import routes')),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+      final existingIds = routes.map((r) => r['id']?.toString()).toSet();
+      for (final route in incoming) {
+        route['id'] = DateTime.now().microsecondsSinceEpoch.toString() + '_${routes.length}';
+        while (existingIds.contains(route['id']?.toString())) {
+          route['id'] = DateTime.now().microsecondsSinceEpoch.toString() + '_${routes.length}';
+        }
+        existingIds.add(route['id']?.toString());
+        routes.add(route);
+      }
+      setState(() {});
+      await save();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imported ${incoming.length} routes. Existing routes were kept.')),
+      );
+    } catch (_) {
+      if (mounted) showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Backup not recognized'),
+          content: const Text('The pasted text is not a valid Next Stop backup. Nothing was imported or changed.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    }
+  }
 
   Future<void> shareRoute(Map<String,dynamic> route) async {
     final jsonPayload = jsonEncode({'app':'next-stop','version':1,'route':route});
