@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -71,7 +72,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
+    appBar: AppBar(title: const Text('Next Stop', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4, color: blue)), actions: [IconButton(tooltip: 'Fuel stations', onPressed: openFuelStations, icon: const Icon(Icons.local_gas_station)), IconButton(tooltip: 'Scan route QR code', onPressed: scanRoute, icon: const Icon(Icons.qr_code_scanner)), IconButton(tooltip: 'Add route', onPressed: addRoute, icon: const Icon(Icons.add_circle_outline))]),
     floatingActionButton: FloatingActionButton.extended(onPressed: addRoute, backgroundColor: orange, foregroundColor: Colors.white, icon: const Icon(Icons.add), label: const Text('New route')),
     body: loading ? const Center(child: CircularProgressIndicator()) : routes.isEmpty
       ? Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.route, size: 68, color: blue), const SizedBox(height: 16), const Text('Plan your delivery day', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), const Text('Create a route, add its stops, and keep your route data saved on this phone.', textAlign: TextAlign.center), const SizedBox(height: 18), FilledButton.icon(onPressed: addRoute, icon: const Icon(Icons.add), label: const Text('Create first route'))])))
@@ -89,22 +90,27 @@ class _RoutesPageState extends State<RoutesPage> {
       }),
   );
 
+  Future<void> openFuelStations() async { final uri=Uri.https('www.google.com','/maps/search/',{'api':'1','query':'petrol stations near me'}); if(!await launchUrl(uri,mode:LaunchMode.externalApplication)&&mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open fuel stations map'))); }
+
   Future<void> shareRoute(Map<String,dynamic> route) async {
     final jsonPayload = jsonEncode({'app':'next-stop','version':1,'route':route});
-    // Compress complete routes before encoding them for QR; large routes often shrink substantially.
+    // Split compressed payload into multiple QR pages instead of rejecting large routes.
     final payload = 'NSZ1:' + base64Url.encode(gzip.encode(utf8.encode(jsonPayload)));
-    if (payload.length > 2500) {
-      if (mounted) showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Route too large'),content:const Text('This route is still too large for a single QR code, even after compression. Use a smaller route for QR sharing; full-route file export/import is the reliable next step.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('OK'))]));
-      return;
-    }
+    const chunkSize=900;
+    final total=(payload.length/chunkSize).ceil();
+    final chunks=<String>[];
+    final session=DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+    for(var n=0;n<total;n++){final piece=payload.substring(n*chunkSize,(n*chunkSize+chunkSize>payload.length)?payload.length:n*chunkSize+chunkSize);chunks.add('NSC1:$session:${n+1}:$total:$piece');}
     if (!mounted) return;
-    showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Share route: ${route['name']}'),content:Column(mainAxisSize:MainAxisSize.min,children:[const Text('Ask the other person to open Next Stop and scan this code.'),const SizedBox(height:12),QrImageView(data:payload,size:245),const SizedBox(height:8),const Text('The receiving phone will ask for confirmation.',textAlign:TextAlign.center)]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+    showDialog<void>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:Text('Share route: ${route['name']}'),content:Column(mainAxisSize:MainAxisSize.min,children:[Text('Scan all ${chunks.length} QR pages in order on the receiving phone.'),const SizedBox(height:12),SizedBox(width:270,height:300,child:PageView.builder(itemCount:chunks.length,onPageChanged:(_)=>setD((){}),itemBuilder:(ctx,index)=>Column(children:[QrImageView(data:chunks[index],size:245),Text('QR ${index+1} / ${chunks.length}',style:const TextStyle(fontWeight:FontWeight.bold))]))),const SizedBox(height:8),const Text('The receiving phone will ask for confirmation after the final page.',textAlign:TextAlign.center)]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))])));
+
   }
   Future<void> scanRoute() async {
     final scanned = await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanRoutePage()));
     if (scanned == null || !mounted) return;
     try {
-      final decodedText = scanned.startsWith('NSZ1:') ? utf8.decode(gzip.decode(base64Url.decode(scanned.substring(5)))) : scanned;
+      final assembled = scanned.startsWith('NSC1|') ? scanned.substring(5) : scanned;
+      final decodedText = assembled.startsWith('NSZ1:') ? utf8.decode(gzip.decode(base64Url.decode(assembled.substring(5)))) : assembled;
       final data = jsonDecode(decodedText) as Map<String,dynamic>;
       if (data['app'] != 'next-stop' || data['route'] is! Map) throw const FormatException();
       final incoming = Map<String,dynamic>.from(data['route'] as Map);
@@ -135,15 +141,22 @@ class ScanRoutePage extends StatefulWidget {
 }
 class _ScanRoutePageState extends State<ScanRoutePage> {
   bool handled = false;
+  final Map<String,String> _chunks={};
+  int? _total;
+  String? _session;
+  bool _waitingForNext=false;
   @override
   Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(title:const Text('Scan route QR code')),
     body:Column(children:[
-      const Padding(padding:EdgeInsets.all(18),child:Text('Point the camera at a Next Stop route QR code. Android will request camera permission if needed.',textAlign:TextAlign.center)),
+      Padding(padding:const EdgeInsets.all(18),child:Text(_total==null?'Point the camera at each QR page in order. The route imports after the final page.':'Scanned ${_chunks.length} of $_total QR pages. ${_waitingForNext?'Tap Continue, then scan the next page.':'Keep the camera on QR ${_chunks.length+1}.'}',textAlign:TextAlign.center)),
+      if(_waitingForNext) Padding(padding:const EdgeInsets.only(bottom:8),child:FilledButton(onPressed:()=>setState(()=>_waitingForNext=false),child:const Text('Continue scanning'))),
       Expanded(child:Padding(padding:const EdgeInsets.all(16),child:ClipRRect(borderRadius:BorderRadius.circular(18),child:MobileScanner(onDetect:(capture){
-        if(handled)return;
+        if(handled||_waitingForNext)return;
         final value=capture.barcodes.isEmpty?null:capture.barcodes.first.rawValue;
-        if(value!=null&&value.isNotEmpty){handled=true;Navigator.pop(context,value);}
+        if(value==null||value.isEmpty)return;
+        if(value.startsWith('NSC1:')){final parts=value.split(':');if(parts.length<5)return;final session=parts[1];final index=int.tryParse(parts[2]);final total=int.tryParse(parts[3]);if(index==null||total==null||index<1||index>total)return;if(_session!=null&&_session!=session){_chunks.clear();} _session=session;_total=total;_chunks[index.toString()]=parts.sublist(4).join(':');if(_chunks.length==total&&List.generate(total,(i)=>(i+1).toString()).every(_chunks.containsKey)){handled=true;Navigator.pop(context,'NSC1|'+List.generate(total,(i)=>_chunks[(i+1).toString()]!).join());}else setState(()=>_waitingForNext=true);
+        }else{handled=true;Navigator.pop(context,value);}
       })))),
     ]),
   );
@@ -182,11 +195,15 @@ class _StopsPageState extends State<StopsPage> {
       'smartNote': TextEditingController(text: existing?['smartNote']?.toString() ?? ''),
       'holidays': TextEditingController(text: existing?['holidays']?.toString() ?? ''),
     };
+    String? photoPath=existing?['photoPath']?.toString();
+    Future<void> pickStopPhoto() async { final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:78,maxWidth:1600); if(x!=null)setState((){}); if(x!=null)photoPath=x.path; }
     String type = existing?['type']?.toString() ?? 'Fixed';
     bool enabled = existing?['enabled'] != false;
     final ok = await showDialog<bool>(context: context, builder: (ctx)=> StatefulBuilder(builder:(ctx,setD)=>AlertDialog(
       title: Text(isEdit?'Edit stop':'Add stop'),
       content: SizedBox(width: 500, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Align(alignment:Alignment.centerLeft,child:OutlinedButton.icon(onPressed:pickStopPhoto,icon:const Icon(Icons.add_a_photo),label:Text(photoPath==null?'Add shop photo':'Change shop photo'))),
+        if(photoPath!=null&&File(photoPath!).existsSync()) Padding(padding:const EdgeInsets.only(bottom:12),child:Image.file(File(photoPath!),height:120,fit:BoxFit.cover)),
         for (final entry in fields.entries.where((e)=>e.key!='holidays')) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextField(controller: entry.value, keyboardType: entry.key=='packages'?TextInputType.number:TextInputType.text, maxLines: ['notes','smartNote'].contains(entry.key)?2:1, decoration: InputDecoration(labelText: const {'shop':'Shop / customer name','street':'Street name','number':'House number','apartment':'Apartment (optional)','postal':'Postal code','city':'City','country':'Country','packages':'Package count','serial':'Stop / reference number','notes':'Notes / description','hours':'Shop opening hours (e.g. Mon-Fri 09:00-17:00)','closedDates':'Weekly closed days (optional)','smartNote':'Smart closure reminder'}[entry.key],helperText:entry.key=='closedDates'?'Example: Sunday, Monday':null))),
         const SizedBox(height:10),Align(alignment:Alignment.centerLeft,child:Text('Shop holidays',style:Theme.of(ctx).textTheme.titleMedium)),
         if(fields['holidays']!.text.trim().isNotEmpty) ...fields['holidays']!.text.split('\n').where((line)=>line.trim().isNotEmpty).map((line){final p=line.split('|');return ListTile(dense:true,contentPadding:EdgeInsets.zero,leading:const Icon(Icons.event_busy,color:Colors.red),title:Text(p.first),subtitle:p.length>1&&p[1].isNotEmpty?Text(p.sublist(1).join('|')):null,trailing:IconButton(icon:const Icon(Icons.delete_outline),onPressed:()=>setD(()=>fields['holidays']!.text=fields['holidays']!.text.split('\n').where((x)=>x!=line).join('\n'))));}),
@@ -197,7 +214,7 @@ class _StopsPageState extends State<StopsPage> {
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:Text(isEdit?'Save':'Add stop'))],
     )));
     if(ok==true && fields['street']!.text.trim().isNotEmpty && fields['city']!.text.trim().isNotEmpty) {
-      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':existing?['done']??false,'created':existing?['created']??DateTime.now().toIso8601String(),'id':existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()};
+      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'photoPath':photoPath, 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':existing?['done']??false,'created':existing?['created']??DateTime.now().toIso8601String(),'id':existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()};
       final items=stops;
       if(isEdit){ final i=items.indexWhere((s)=>s['id']==existing['id']); if(i>=0)items[i]=data; } else {items.add(data);}
       await persist(items);
@@ -221,9 +238,9 @@ class _StopsPageState extends State<StopsPage> {
     final items=allItems.where((s)=>ids.contains(s['id'].toString())).toList(); final active=items.where((s)=>s['enabled']!=false && s['done']!=true).length;
     return Scaffold(
       appBar:AppBar(title:Text(widget.route['name']?.toString()??'Route'), actions:[IconButton(tooltip:'Edit route warehouse',icon:const Icon(Icons.edit_location_alt),onPressed:()=>editWarehouse())]),
-      floatingActionButton:FloatingActionButton.extended(onPressed:()=>addStop(),backgroundColor:orange,foregroundColor:Colors.white,icon:const Icon(Icons.add_location_alt),label:const Text('Add stop')),
+      floatingActionButton:null,
       body:Column(children:[
-        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
+        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
         Expanded(child:items.isEmpty?const Center(child:Text('No stops yet. Add your first stop.')):ReorderableListView.builder(padding:const EdgeInsets.all(12),itemCount:items.length,onReorder:(oldIndex,newIndex) async {final list=stops; if(newIndex>oldIndex)newIndex--; final item=list.removeAt(oldIndex); list.insert(newIndex,item); await persist(list);},itemBuilder:(ctx,i){
           final s=items[i]; final done=s['done']==true; final guest=s['type']=='Guest';
           final today=DateTime.now().toIso8601String().substring(0,10);
@@ -245,6 +262,12 @@ class _StopsPageState extends State<StopsPage> {
         })),
       ]),
     );
+  }
+  Future<void> openProblemReport() async {
+    final kinds=['Vehicle: Oil change','Vehicle: Brakes','Vehicle: Tires','Vehicle: Lights','Vehicle: Engine coolant / water','Vehicle: Engine fault','Accident','Route problem','Other'];
+    String kind=kinds.first;final notes=TextEditingController();final photos=<String>[];
+    final yes=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text('Report a problem'),content:SizedBox(width:480,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[DropdownButtonFormField<String>(value:kind,items:[for(final k in kinds)DropdownMenuItem(value:k,child:Text(k))],onChanged:(v)=>setD(()=>kind=v??kinds.first),decoration:const InputDecoration(labelText:'Problem type')),const SizedBox(height:8),TextField(controller:notes,maxLines:4,decoration:const InputDecoration(labelText:'Details / vehicle or route issue')),const SizedBox(height:8),OutlinedButton.icon(onPressed:()async{final xs=await ImagePicker().pickMultiImage(imageQuality:75,maxWidth:1600);setD(()=>photos.addAll(xs.map((x)=>x.path)));},icon:const Icon(Icons.photo_library),label:Text('Add photos (${photos.length})')),for(final p in photos)if(File(p).existsSync())Padding(padding:const EdgeInsets.only(top:6),child:Image.file(File(p),height:70,fit:BoxFit.cover)),if(kind=='Accident')const Text('For emergencies, contact emergency services first.',style:TextStyle(color:Colors.red))]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Save report'))])));
+    if(yes==true){final reports=List<Map<String,dynamic>>.from((widget.route['reports'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)));reports.add({'id':DateTime.now().microsecondsSinceEpoch.toString(),'type':kind,'notes':notes.text.trim(),'photos':photos,'created':DateTime.now().toIso8601String(),'status':'Open'});widget.route['reports']=reports;await widget.onChanged();if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Problem report saved on this phone.')));}
   }
   Future<void> editWarehouse() async {
     final c=TextEditingController(text:widget.route['warehouse']?.toString()??'');
@@ -294,6 +317,7 @@ class _StopsPageState extends State<StopsPage> {
   void showDetails(Map<String,dynamic> s,int i) {
     showModalBottomSheet(context:context,showDragHandle:true,isScrollControlled:true,builder:(ctx)=>Padding(padding:const EdgeInsets.all(20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[
       Text('Stop '+(i+1).toString()+': '+(s['shop']??'').toString(),style:Theme.of(context).textTheme.titleLarge),const SizedBox(height:12),
+      if((s['photoPath']?.toString().isNotEmpty??false)&&File(s['photoPath'].toString()).existsSync())ClipRRect(borderRadius:BorderRadius.circular(14),child:Image.file(File(s['photoPath'].toString()),width:double.infinity,fit:BoxFit.contain)),
       for(final pair in <String,String>{'Address':address(s),'Packages':s['packages'].toString(),'Type':s['type'].toString(),'Opening hours':(s['hours']??'').toString(),'Weekly closed days':(s['closedDates']??'').toString(),'Shop holidays':(s['holidays']??'').toString().replaceAll('\n','; '),'Smart reminder':(s['smartNote']??'').toString(),'Reference':(s['serial']??'').toString(),'Notes':(s['notes']??'').toString(),'Created':(s['created']??'').toString(),'Status':s['done']==true?'Completed':'Pending'}.entries) Padding(padding:const EdgeInsets.symmetric(vertical:5),child:Text(pair.key+': '+(pair.value.isEmpty?'—':pair.value))),
       const SizedBox(height:16),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
     ]))));
