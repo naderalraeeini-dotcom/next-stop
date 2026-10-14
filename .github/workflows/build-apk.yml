@@ -41,6 +41,33 @@ jobs:
               raise SystemExit('Could not locate compileSdk setting in generated Gradle file')
           p.write_text(s)
           PY
+      - name: Add Nearby Connections Android permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          permissions = [
+            '<uses-permission android:maxSdkVersion="31" android:name="android.permission.ACCESS_WIFI_STATE" />',
+            '<uses-permission android:maxSdkVersion="31" android:name="android.permission.CHANGE_WIFI_STATE" />',
+            '<uses-permission android:maxSdkVersion="30" android:name="android.permission.BLUETOOTH" />',
+            '<uses-permission android:maxSdkVersion="30" android:name="android.permission.BLUETOOTH_ADMIN" />',
+            '<uses-permission android:maxSdkVersion="28" android:name="android.permission.ACCESS_COARSE_LOCATION" />',
+            '<uses-permission android:minSdkVersion="29" android:maxSdkVersion="31" android:name="android.permission.ACCESS_FINE_LOCATION" />',
+            '<uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_ADVERTISE" />',
+            '<uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_CONNECT" />',
+            '<uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_SCAN" />',
+            '<uses-permission android:minSdkVersion="32" android:name="android.permission.NEARBY_WIFI_DEVICES" />',
+          ]
+          missing = [item for item in permissions if item.split('android:name="')[1].split('"')[0] not in s]
+          if missing:
+              marker = '<application'
+              if marker not in s:
+                  raise SystemExit('Could not locate Android application tag')
+              s = s.replace(marker, '\n'.join(missing) + '\n    ' + marker, 1)
+              p.write_text(s)
+          print('Nearby Connections permissions added/verified')
+          PY
       - name: Install icon generation dependency
         run: python3 -m pip install --user pillow
       - name: Create Next Stop launcher icon assets
