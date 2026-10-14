@@ -364,7 +364,7 @@ class _StopsPageState extends State<StopsPage> {
     final now=DateTime.now().toIso8601String().substring(0,10);
     if(widget.route['tripDay']!=null && widget.route['tripDay'].toString()!=now){final list=stops;for(final s in list){s['done']=false;}widget.route['stops']=list;widget.route['tripDay']=now;widget.route['tripStarted']=false;widget.route['dailyStopIds']=list.where((s)=>s['enabled']!=false).map((s)=>s['id'].toString()).toList();await widget.onChanged();if(mounted){setState((){});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('New day: unfinished stops have been reset.')));}}
   }
-  Future<void> addStop([Map<String,dynamic>? existing, {bool asNew = false}]) async {
+  Future<void> addStop([Map<String,dynamic>? existing, bool asNew = false]) async {
     final isEdit = existing != null && !asNew;
     final fields = <String,TextEditingController>{
       'shop': TextEditingController(text: existing?['shop']?.toString() ?? ''),
@@ -449,7 +449,7 @@ class _StopsPageState extends State<StopsPage> {
       }
       final incoming=Map<String,dynamic>.from(value['stop'] as Map);
       incoming.remove('photoPath');
-      await addStop(incoming,asNew:true);
+      await addStop(incoming,true);
     } on FormatException catch(e) {
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not read stop code: ${e.message}')));
     } catch(e) {
