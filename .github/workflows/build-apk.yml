@@ -118,20 +118,20 @@ jobs:
         run: flutter analyze lib --no-fatal-infos --no-fatal-warnings
       - name: Configure persistent release signing when secrets are set
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NEXT_STOP_KEYSTORE_BASE64: ${{ secrets.NEXT_STOP_KEYSTORE_BASE64 }}
+          NEXT_STOP_STORE_PASSWORD: ${{ secrets.NEXT_STOP_STORE_PASSWORD }}
+          NEXT_STOP_KEY_ALIAS: ${{ secrets.NEXT_STOP_KEY_ALIAS }}
+          NEXT_STOP_KEY_PASSWORD: ${{ secrets.NEXT_STOP_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+          if [ -z "$NEXT_STOP_KEYSTORE_BASE64" ] || [ -z "$NEXT_STOP_STORE_PASSWORD" ] || [ -z "$NEXT_STOP_KEY_ALIAS" ] || [ -z "$NEXT_STOP_KEY_PASSWORD" ]; then
             echo "Persistent signing secrets are not configured; this APK will use the CI default signing key and may not update an existing installation."
             exit 0
           fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/next-stop-release.jks
+          echo "$NEXT_STOP_KEYSTORE_BASE64" | base64 --decode > android/app/next-stop-release.jks
           cat > android/key.properties <<EOF
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyPassword=$ANDROID_KEY_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
+          storePassword=$NEXT_STOP_STORE_PASSWORD
+          keyPassword=$NEXT_STOP_KEY_PASSWORD
+          keyAlias=$NEXT_STOP_KEY_ALIAS
           storeFile=next-stop-release.jks
           EOF
           python3 - <<'PY'
@@ -144,10 +144,10 @@ jobs:
           signing='''android {
               signingConfigs {
                   create("release") {
-                      keyAlias = providers.gradleProperty("unused").orNull ?: System.getenv("ANDROID_KEY_ALIAS")
-                      keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                      keyAlias = System.getenv("NEXT_STOP_KEY_ALIAS")
+                      keyPassword = System.getenv("NEXT_STOP_KEY_PASSWORD")
                       storeFile = file("next-stop-release.jks")
-                      storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      storePassword = System.getenv("NEXT_STOP_STORE_PASSWORD")
                   }
               }
           '''
@@ -157,9 +157,9 @@ jobs:
           PY
       - name: Build release APK
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NEXT_STOP_STORE_PASSWORD: ${{ secrets.NEXT_STOP_STORE_PASSWORD }}
+          NEXT_STOP_KEY_ALIAS: ${{ secrets.NEXT_STOP_KEY_ALIAS }}
+          NEXT_STOP_KEY_PASSWORD: ${{ secrets.NEXT_STOP_KEY_PASSWORD }}
         run: flutter build apk --release
       - name: Upload APK
         uses: actions/upload-artifact@v4
