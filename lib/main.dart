@@ -298,7 +298,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
       final input=<Map<String,dynamic>>[{'id':'warehouse','label':'W','title':'Start / warehouse','address':widget.startAddress,'kind':'warehouse'}];
       for(var i=0;i<widget.stops.length;i++){
         final s=widget.stops[i];
-        input.add({'id':s['id']?.toString()??'$i','label':(s['serial']?.toString().trim().isNotEmpty==true)?s['serial'].toString().trim():'${i+1}','title':(s['shop']??'Stop').toString(),'address':widget.addressOf(s),'kind':'stop','stop':s});
+        input.add({'id':s['id']?.toString()??'$i','label':(s['shop']?.toString().trim().isNotEmpty==true)?s['shop'].toString().trim():'Stop ${i+1}','title':(s['shop']?.toString().trim().isNotEmpty==true)?s['shop'].toString().trim():'Stop ${i+1}','address':widget.addressOf(s),'kind':'stop','stop':s});
       }
       if(widget.endAddress.trim()!=widget.startAddress.trim())input.add({'id':'return','label':'R','title':'Return point','address':widget.endAddress,'kind':'return'});
       for(var i=0;i<input.length;i++){
@@ -342,7 +342,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
       ])),
       SizedBox(height:200,child:ListView(padding:const EdgeInsets.all(12),children:[
         const Text('Suggested stop order',style:TextStyle(fontWeight:FontWeight.bold,fontSize:16)),
-        for(var i=0;i<orderedStops.length;i++)ListTile(dense:true,leading:CircleAvatar(child:Text('${i+1}')),title:Text((orderedStops[i]['serial']?.toString().trim().isNotEmpty==true)?orderedStops[i]['serial'].toString():(orderedStops[i]['shop']??'Stop').toString()),subtitle:Text(widget.addressOf(orderedStops[i])),trailing:Text((orderedStops[i]['hours']??'').toString(),style:const TextStyle(fontSize:11))),
+        for(var i=0;i<orderedStops.length;i++)ListTile(dense:true,leading:CircleAvatar(child:Text('${i+1}')),title:Text((orderedStops[i]['shop']?.toString().trim().isNotEmpty==true)?orderedStops[i]['shop'].toString():'Stop ${i+1}'),subtitle:Text('${(orderedStops[i]['serial']?.toString().trim().isNotEmpty==true)?'Ref: ${orderedStops[i]['serial']} • ':''}${widget.addressOf(orderedStops[i])}'),trailing:Text((orderedStops[i]['hours']??'').toString(),style:const TextStyle(fontSize:11))),
         const Text('Route order is optimized by road distance/time. Opening hours are shown for review but are not yet used as hard scheduling constraints.',style:TextStyle(fontSize:12,color:Colors.grey))
       ]))
     ])
