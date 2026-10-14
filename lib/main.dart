@@ -172,13 +172,22 @@ class _RoutesPageState extends State<RoutesPage> {
 
   Future<void> importRouteFile() async {
     try {
-      final picked=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['json','nextstop'],withData:true);
+      // WhatsApp and Android document providers may give exported files a
+      // different extension or no extension at all. Let the user select the
+      // received file, then validate its contents instead of filtering by name.
+      final picked=await FilePicker.platform.pickFiles(type:FileType.any,withData:true);
       if(picked==null||picked.files.isEmpty)return;
       final file=picked.files.single;
       final bytes=file.bytes??(file.path!=null?await File(file.path!).readAsBytes():null);
-      if(bytes==null)throw const FormatException('The selected file could not be read.');
-      final data=jsonDecode(utf8.decode(bytes)) as Map<String,dynamic>;
-      if(data['app']!='next-stop'||data['route'] is! Map)throw const FormatException('Not a Next Stop route file.');
+      if(bytes==null)throw const FormatException('Android could not read this file. Save it to Downloads and try again.');
+      var text= utf8.decode(bytes,allowMalformed:false);
+      if(text.startsWith('\uFEFF')) text=text.substring(1);
+      final decoded=jsonDecode(text);
+      if(decoded is! Map)throw const FormatException('This file is not a valid JSON route export.');
+      final data=Map<String,dynamic>.from(decoded);
+      if(data['app']!='next-stop'||data['route'] is! Map) {
+        throw const FormatException('This file is not a Next Stop route export. Choose the original NextStop_*.json file shared from the app.');
+      }
       var incoming=await _restoreRoutePhotos(Map<String,dynamic>.from(data['route'] as Map));
       final incomingStops=(incoming['stops'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)).toList();
       incoming['id']=DateTime.now().microsecondsSinceEpoch.toString();
@@ -190,7 +199,11 @@ class _RoutesPageState extends State<RoutesPage> {
       incoming['tripStarted']=false;
       final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Import route file?'),content:Text('Add "${incoming['name']}" with ${incomingStops.length} stops? Existing routes will not change.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Import'))]));
       if(yes==true&&mounted){setState(()=>routes.add(incoming));await save();ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Route and available photos imported successfully.')));}
-    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not import route file: $e')));}
+    } on FormatException catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Import failed: ${e.message}')));
+    } catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not import route file. Save the file to Downloads and retry. Details: $e')));
+    }
   }
 
   Future<void> scanRoute() async {
