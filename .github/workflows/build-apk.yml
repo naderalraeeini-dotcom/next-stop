@@ -2,7 +2,7 @@ name: Build Next Stop APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/route-planning-and-reports]
   pull_request:
     branches: [main]
   workflow_dispatch:
