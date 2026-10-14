@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -363,8 +364,8 @@ class _StopsPageState extends State<StopsPage> {
     final now=DateTime.now().toIso8601String().substring(0,10);
     if(widget.route['tripDay']!=null && widget.route['tripDay'].toString()!=now){final list=stops;for(final s in list){s['done']=false;}widget.route['stops']=list;widget.route['tripDay']=now;widget.route['tripStarted']=false;widget.route['dailyStopIds']=list.where((s)=>s['enabled']!=false).map((s)=>s['id'].toString()).toList();await widget.onChanged();if(mounted){setState((){});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('New day: unfinished stops have been reset.')));}}
   }
-  Future<void> addStop([Map<String,dynamic>? existing]) async {
-    final isEdit = existing != null;
+  Future<void> addStop([Map<String,dynamic>? existing, {bool asNew = false}]) async {
+    final isEdit = existing != null && !asNew;
     final fields = <String,TextEditingController>{
       'shop': TextEditingController(text: existing?['shop']?.toString() ?? ''),
       'street': TextEditingController(text: existing?['street']?.toString() ?? ''),
@@ -400,12 +401,62 @@ class _StopsPageState extends State<StopsPage> {
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:Text(isEdit?'Save':'Add stop'))],
     )));
     if(ok==true && fields['street']!.text.trim().isNotEmpty && fields['city']!.text.trim().isNotEmpty) {
-      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'photoPath':photoPath, 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':existing?['done']??false,'created':existing?['created']??DateTime.now().toIso8601String(),'id':existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()};
+      final data=<String,dynamic>{for(final e in fields.entries)e.key:e.value.text.trim(), 'photoPath':photoPath, 'packages':int.tryParse(fields['packages']!.text)??1, 'type':type,'enabled':enabled,'done':isEdit?(existing?['done']??false):false,'created':isEdit?(existing?['created']??DateTime.now().toIso8601String()):DateTime.now().toIso8601String(),'id':isEdit?(existing?['id']??DateTime.now().microsecondsSinceEpoch.toString()):DateTime.now().microsecondsSinceEpoch.toString()};
       final items=stops;
       if(isEdit){ final i=items.indexWhere((s)=>s['id']==existing['id']); if(i>=0)items[i]=data; } else {items.add(data);}
       await persist(items);
     }
   }
+  Map<String,dynamic> _portableStop(Map<String,dynamic> stop) {
+    final copy=Map<String,dynamic>.from(stop);
+    // A phone-local photo path is not valid on another device. QR carries
+    // all text/structured fields; use route-file Quick Share for photo transfer.
+    copy.remove('photoPath');
+    copy.remove('photoDataBase64');
+    copy.remove('done');
+    copy.remove('id');
+    copy.remove('created');
+    return copy;
+  }
+
+  String _stopCode(Map<String,dynamic> stop)=>jsonEncode({'app':'next-stop','kind':'stop','version':1,'stop':_portableStop(stop)});
+
+  Future<void> showStopCode(Map<String,dynamic> stop) async {
+    final code=_stopCode(stop);
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text('Stop code • ${stop['shop']??'Stop'}'),
+      content:SizedBox(width:300,child:Column(mainAxisSize:MainAxisSize.min,children:[
+        QrImageView(data:code,size:250,errorCorrectionLevel:QrErrorCorrectLevel.M),
+        const SizedBox(height:8),
+        const Text('Scan this code on the other phone to add this stop. Photos are transferred with route-file sharing.',textAlign:TextAlign.center),
+      ])),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),
+        FilledButton.icon(onPressed:(){Clipboard.setData(ClipboardData(text:code));ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Stop code copied. You can paste it into a message.')));},icon:const Icon(Icons.copy),label:const Text('Copy code')),
+      ],
+    ));
+  }
+
+  Future<void> scanStopCode() async {
+    final scanned=await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanRoutePage()));
+    if(scanned==null||!mounted)return;
+    try {
+      final raw=scanned.startsWith('NSC1|')?scanned.substring(5):scanned;
+      final decoded=raw.startsWith('NSZ1:')?utf8.decode(gzip.decode(base64Url.decode(raw.substring(5)))):raw;
+      final value=jsonDecode(decoded);
+      if(value is! Map||value['app']!='next-stop'||value['kind']!='stop'||value['stop'] is! Map) {
+        throw const FormatException('This QR code is not a single Next Stop stop code.');
+      }
+      final incoming=Map<String,dynamic>.from(value['stop'] as Map);
+      incoming.remove('photoPath');
+      await addStop(incoming,asNew:true);
+    } on FormatException catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not read stop code: ${e.message}')));
+    } catch(e) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not import stop code: $e')));
+    }
+  }
+
   String address(Map<String,dynamic> s)=>[s['number'],s['street'],s['apartment'],s['postal'],s['city'],s['country']].where((x)=>x!=null && x.toString().trim().isNotEmpty).join(' ');
   Future<void> navigate(Map<String,dynamic> s) async {
     final q=Uri.encodeComponent(address(s));
@@ -426,7 +477,7 @@ class _StopsPageState extends State<StopsPage> {
       appBar:AppBar(title:Text(widget.route['name']?.toString()??'Route'), actions:[IconButton(tooltip:'Edit route warehouse',icon:const Icon(Icons.edit_location_alt),onPressed:()=>editWarehouse())]),
       floatingActionButton:null,
       body:Column(children:[
-        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
+        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:scanStopCode,icon:const Icon(Icons.qr_code_scanner),label:const Text('Scan stop code')))]),const SizedBox(height:8),SizedBox(width:double.infinity,child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue'))),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
         Expanded(child:items.isEmpty?const Center(child:Text('No stops yet. Add your first stop.')):ReorderableListView.builder(padding:const EdgeInsets.all(12),itemCount:items.length,onReorder:(oldIndex,newIndex) async {final list=stops; if(newIndex>oldIndex)newIndex--; final item=list.removeAt(oldIndex); list.insert(newIndex,item); await persist(list);},itemBuilder:(ctx,i){
           final s=items[i]; final done=s['done']==true; final guest=s['type']=='Guest';
           final today=DateTime.now().toIso8601String().substring(0,10);
@@ -503,7 +554,7 @@ class _StopsPageState extends State<StopsPage> {
       Text('Stop '+(i+1).toString()+': '+(s['shop']??'').toString(),style:Theme.of(context).textTheme.titleLarge),const SizedBox(height:12),
       if((s['photoPath']?.toString().isNotEmpty??false)&&File(s['photoPath'].toString()).existsSync())ClipRRect(borderRadius:BorderRadius.circular(14),child:Image.file(File(s['photoPath'].toString()),width:double.infinity,fit:BoxFit.contain)),
       for(final pair in <String,String>{'Address':address(s),'Packages':s['packages'].toString(),'Type':s['type'].toString(),'Opening hours':(s['hours']??'').toString(),'Weekly closed days':(s['closedDates']??'').toString(),'Shop holidays':(s['holidays']??'').toString().replaceAll('\n','; '),'Smart reminder':(s['smartNote']??'').toString(),'Reference':(s['serial']??'').toString(),'Notes':(s['notes']??'').toString(),'Created':(s['created']??'').toString(),'Status':s['done']==true?'Completed':'Pending'}.entries) Padding(padding:const EdgeInsets.symmetric(vertical:5),child:Text(pair.key+': '+(pair.value.isEmpty?'—':pair.value))),
-      const SizedBox(height:16),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
+      const SizedBox(height:16),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>showStopCode(s),icon:const Icon(Icons.qr_code_2),label:const Text('Show / copy code'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:(){Navigator.pop(ctx);addStop(s);},icon:const Icon(Icons.edit),label:const Text('Edit stop')))]),const SizedBox(height:8),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
     ]))));
   }
 }
