@@ -477,7 +477,7 @@ class _StopsPageState extends State<StopsPage> {
       appBar:AppBar(title:Text(widget.route['name']?.toString()??'Route'), actions:[IconButton(tooltip:'Edit route warehouse',icon:const Icon(Icons.edit_location_alt),onPressed:()=>editWarehouse())]),
       floatingActionButton:null,
       body:Column(children:[
-        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:scanStopCode,icon:const Icon(Icons.qr_code_scanner),label:const Text('Scan stop code')))]),const SizedBox(height:8),SizedBox(width:double.infinity,child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue'))),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
+        Container(color:Colors.white,padding:const EdgeInsets.all(14),child:Column(children:[Row(children:[const Icon(Icons.flag_outlined,color:blue),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Return point',style:TextStyle(fontWeight:FontWeight.bold)),Text((widget.route['endAddress']??widget.route['warehouse']??'Not set').toString())])),Text(active.toString()+' left',style:const TextStyle(color:blue,fontWeight:FontWeight.bold))]),const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:chooseTodayStops,icon:const Icon(Icons.checklist),label:const Text('Select today’s stops'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(onPressed:optimizeToday,icon:const Icon(Icons.alt_route),label:const Text('Suggest route')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>addStop(),icon:const Icon(Icons.add_location_alt),label:const Text('Add stop'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:scanStopCode,icon:const Icon(Icons.qr_code_scanner),label:const Text('Scan stop code')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:openProblemReport,icon:const Icon(Icons.report_problem_outlined),label:const Text('Report issue'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:manageProblemReports,icon:const Icon(Icons.receipt_long),label:Text('Reports ('+(widget.route['reports'] as List? ?? []).length.toString()+')')))]),const SizedBox(height:8),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>navigateAddress((widget.route['endAddress']??widget.route['warehouse']??'').toString()),icon:const Icon(Icons.navigation),label:const Text('Navigate to return'))),const SizedBox(width:8),Expanded(child:FilledButton.icon(style:FilledButton.styleFrom(backgroundColor:orange),onPressed:finishRoute,icon:const Icon(Icons.flag),label:const Text('Mark complete')))])])),
         Expanded(child:items.isEmpty?const Center(child:Text('No stops yet. Add your first stop.')):ReorderableListView.builder(padding:const EdgeInsets.all(12),itemCount:items.length,onReorder:(oldIndex,newIndex) async {final list=stops; if(newIndex>oldIndex)newIndex--; final item=list.removeAt(oldIndex); list.insert(newIndex,item); await persist(list);},itemBuilder:(ctx,i){
           final s=items[i]; final done=s['done']==true; final guest=s['type']=='Guest';
           final today=DateTime.now().toIso8601String().substring(0,10);
@@ -506,6 +506,130 @@ class _StopsPageState extends State<StopsPage> {
     final yes=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text('Report a problem'),content:SizedBox(width:480,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[DropdownButtonFormField<String>(value:kind,items:[for(final k in kinds)DropdownMenuItem(value:k,child:Text(k))],onChanged:(v)=>setD(()=>kind=v??kinds.first),decoration:const InputDecoration(labelText:'Problem type')),const SizedBox(height:8),TextField(controller:notes,maxLines:4,decoration:const InputDecoration(labelText:'Details / vehicle or route issue')),const SizedBox(height:8),OutlinedButton.icon(onPressed:()async{final xs=await ImagePicker().pickMultiImage(imageQuality:75,maxWidth:1600);setD(()=>photos.addAll(xs.map((x)=>x.path)));},icon:const Icon(Icons.photo_library),label:Text('Add photos (${photos.length})')),for(final p in photos)if(File(p).existsSync())Padding(padding:const EdgeInsets.only(top:6),child:Image.file(File(p),height:70,fit:BoxFit.cover)),if(kind=='Accident')const Text('For emergencies, contact emergency services first.',style:TextStyle(color:Colors.red))]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Save report'))])));
     if(yes==true){final reports=List<Map<String,dynamic>>.from((widget.route['reports'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)));reports.add({'id':DateTime.now().microsecondsSinceEpoch.toString(),'type':kind,'notes':notes.text.trim(),'photos':photos,'created':DateTime.now().toIso8601String(),'status':'Open'});widget.route['reports']=reports;await widget.onChanged();if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Problem report saved on this phone.')));}
   }
+
+  Future<void> manageProblemReports() async {
+    final reports = List<Map<String,dynamic>>.from(
+      (widget.route['reports'] as List? ?? []).map((e)=>Map<String,dynamic>.from(e)),
+    );
+    if (reports.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content:Text('No saved problem reports yet.')),
+      );
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context:context, isScrollControlled:true, showDragHandle:true,
+      builder:(sheetContext)=>SafeArea(child:StatefulBuilder(
+        builder:(sheetContext,setSheetState)=>SizedBox(
+          height:MediaQuery.of(sheetContext).size.height*0.82,
+          child:Column(children:[
+            Padding(padding:const EdgeInsets.fromLTRB(16,4,16,8),child:Row(children:[
+              Expanded(child:Text('Problem reports ('+reports.length.toString()+')',style:Theme.of(sheetContext).textTheme.titleLarge)),
+              IconButton(tooltip:'Share all reports',icon:const Icon(Icons.share),onPressed:() async {
+                final paths=<String>[];
+                final lines=<String>['Next Stop — vehicle and route problem reports','Route: '+(widget.route['name']??'Route').toString(),''];
+                for(var i=0;i<reports.length;i++){
+                  final r=reports[i];
+                  lines.add((i+1).toString()+'. '+(r['type']??'Problem').toString());
+                  lines.add('Date: '+(r['created']??'Unknown').toString());
+                  lines.add('Status: '+(r['status']??'Open').toString());
+                  lines.add('Details: '+(r['notes']??'—').toString());
+                  lines.add('');
+                  for(final raw in (r['photos'] as List? ?? [])){
+                    final p=raw.toString(); if(p.isNotEmpty && await File(p).exists()) paths.add(p);
+                  }
+                }
+                await Share.shareXFiles(paths.map((p)=>XFile(p)).toList(),text:lines.join('\n'),subject:'Next Stop problem reports');
+              }),
+            ])),
+            const Divider(height:1),
+            Expanded(child:ListView.builder(
+              padding:const EdgeInsets.all(12), itemCount:reports.length,
+              itemBuilder:(ctx,i){
+                final report=reports[i];
+                final photos=(report['photos'] as List? ?? []).map((e)=>e.toString()).toList();
+                return Card(child:Padding(padding:const EdgeInsets.all(12),child:Column(
+                  crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Row(children:[
+                      Expanded(child:Text((report['type']??'Problem').toString(),style:const TextStyle(fontWeight:FontWeight.bold))),
+                      IconButton(tooltip:'Edit report',icon:const Icon(Icons.edit_outlined),onPressed:() async {
+                        final note=TextEditingController(text:(report['notes']??'').toString());
+                        final status=TextEditingController(text:(report['status']??'Open').toString());
+                        final changed=await showDialog<bool>(context:context,builder:(dctx)=>AlertDialog(
+                          title:const Text('Edit problem report'),
+                          content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+                            Text((report['type']??'Problem').toString()),
+                            TextField(controller:note,maxLines:4,decoration:const InputDecoration(labelText:'Details')),
+                            TextField(controller:status,decoration:const InputDecoration(labelText:'Status')),
+                          ])),
+                          actions:[TextButton(onPressed:()=>Navigator.pop(dctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(dctx,true),child:const Text('Save'))],
+                        ));
+                        if(changed==true){
+                          report['notes']=note.text.trim();
+                          report['status']=status.text.trim().isEmpty?'Open':status.text.trim();
+                          report['photos']=photos;
+                          widget.route['reports']=reports;
+                          await widget.onChanged();
+                          setSheetState((){});
+                          if(mounted)setState((){});
+                        }
+                      }),
+                      IconButton(tooltip:'Delete report',icon:const Icon(Icons.delete_outline,color:Colors.red),onPressed:() async {
+                        final yes=await showDialog<bool>(context:context,builder:(dctx)=>AlertDialog(
+                          title:const Text('Delete report?'),
+                          content:const Text('This removes the selected report from this route.'),
+                          actions:[TextButton(onPressed:()=>Navigator.pop(dctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(dctx,true),child:const Text('Delete'))],
+                        ));
+                        if(yes==true){
+                          reports.removeAt(i); widget.route['reports']=reports;
+                          await widget.onChanged(); setSheetState((){});
+                          if(mounted)setState((){});
+                        }
+                      }),
+                    ]),
+                    Text('Date: '+(report['created']??'').toString()),
+                    Text('Status: '+(report['status']??'Open').toString()),
+                    if((report['notes']??'').toString().trim().isNotEmpty) Padding(padding:const EdgeInsets.only(top:6),child:Text(report['notes'].toString())),
+                    if(photos.isNotEmpty) Padding(padding:const EdgeInsets.only(top:8),child:Wrap(spacing:8,runSpacing:8,children:[
+                      for(var pi=0;pi<photos.length;pi++)
+                        if(File(photos[pi]).existsSync()) SizedBox(width:92,child:Column(children:[
+                          Image.file(File(photos[pi]),width:92,height:76,fit:BoxFit.cover),
+                          TextButton(onPressed:(){
+                            setSheetState(()=>photos.removeAt(pi));
+                            report['photos']=photos; widget.route['reports']=reports; widget.onChanged();
+                          },child:const Text('Remove photo',style:TextStyle(fontSize:11))),
+                        ])),
+                    ])),
+                    OutlinedButton.icon(onPressed:() async {
+                      final picked=await ImagePicker().pickMultiImage(imageQuality:75,maxWidth:1600);
+                      if(picked.isNotEmpty){setSheetState(()=>photos.addAll(picked.map((x)=>x.path)));report['photos']=photos;widget.route['reports']=reports;await widget.onChanged();}
+                    },icon:const Icon(Icons.add_photo_alternate),label:const Text('Add photos')),
+                  ],
+                )));
+              },
+            )),
+            Padding(padding:const EdgeInsets.all(12),child:SizedBox(width:double.infinity,child:FilledButton.icon(
+              onPressed:() async {
+                final paths=<String>[];
+                final lines=<String>['Next Stop — vehicle and route problem reports','Route: '+(widget.route['name']??'Route').toString(),''];
+                for(var i=0;i<reports.length;i++){
+                  final r=reports[i];
+                  lines.add((i+1).toString()+'. '+(r['type']??'Problem').toString());
+                  lines.add('Date: '+(r['created']??'Unknown').toString());
+                  lines.add('Status: '+(r['status']??'Open').toString());
+                  lines.add('Details: '+(r['notes']??'—').toString()); lines.add('');
+                  for(final raw in (r['photos'] as List? ?? [])){final p=raw.toString();if(p.isNotEmpty&&await File(p).exists())paths.add(p);}
+                }
+                await Share.shareXFiles(paths.map((p)=>XFile(p)).toList(),text:lines.join('\n'),subject:'Next Stop problem reports');
+              },
+              icon:const Icon(Icons.share),label:const Text('Share all reports and photos'),
+            ))),
+          ]),
+        ),
+      )),
+    );
+  }
+
   Future<void> editWarehouse() async {
     final c=TextEditingController(text:widget.route['warehouse']?.toString()??'');
     final end=TextEditingController(text:widget.route['endAddress']?.toString()??widget.route['warehouse']?.toString()??'');
