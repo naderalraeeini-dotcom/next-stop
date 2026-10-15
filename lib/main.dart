@@ -13,6 +13,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'vehicles_page.dart';
 
 void main() => runApp(const NextStopApp());
 const blue = Color(0xFF1769AA);
@@ -25,7 +26,7 @@ class NextStopApp extends StatelessWidget {
     title: 'Next Stop',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: blue), scaffoldBackgroundColor: const Color(0xFFFFFFFF), useMaterial3: true, appBarTheme: const AppBarTheme(backgroundColor: Colors.white, foregroundColor: Color(0xFF17212F)), cardTheme: CardThemeData(color: Colors.white, elevation: 1, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)))),
-    home: const RoutesPage(),
+    home: const NextStopShell(),
   );
 }
 
@@ -709,4 +710,61 @@ class _StopsPageState extends State<StopsPage> {
       const SizedBox(height:16),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()=>showStopCode(s),icon:const Icon(Icons.qr_code_2),label:const Text('Show / copy code'))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:(){Navigator.pop(ctx);addStop(s);},icon:const Icon(Icons.edit),label:const Text('Edit stop')))]),const SizedBox(height:8),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()=>navigate(s),icon:const Icon(Icons.navigation),label:const Text('Start Journey'))),const SizedBox(height:18)
     ]))));
   }
+}
+
+
+class NextStopShell extends StatefulWidget {
+  const NextStopShell({super.key});
+  @override
+  State<NextStopShell> createState() => _NextStopShellState();
+}
+class _NextStopShellState extends State<NextStopShell> {
+  final PageController _pages = PageController();
+  int _index = 0;
+  final _titles = const ['Next Stop','المركبات','السائقون','الحسابات','الإشعارات'];
+  @override
+  void dispose() { _pages.dispose(); super.dispose(); }
+  void _go(int index) { setState(() => _index = index); _pages.animateToPage(index, duration: const Duration(milliseconds: 220), curve: Curves.easeOut); }
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: PageView(
+      controller: _pages,
+      onPageChanged: (i) => setState(() => _index = i),
+      children: const [
+        RoutesPage(),
+        VehiclesPage(),
+        _ComingSoonPage(title: 'السائقون', icon: Icons.badge_outlined, detail: 'ستُضاف هنا ملفات السائقين وربط كل سائق بالمركبة والرحلات.'),
+        _ComingSoonPage(title: 'الحسابات', icon: Icons.account_balance_wallet_outlined, detail: 'ستُضاف هنا مصاريف المركبات والوقود والصيانة والأقساط والتقارير المالية.'),
+        _ComingSoonPage(title: 'الإشعارات', icon: Icons.notifications_active_outlined, detail: 'ستُجمع هنا تنبيهات APK والأقساط والصيانة والمخالفات بعد تفعيل جدولة الإشعارات.'),
+      ],
+    ),
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: _index,
+      onDestinationSelected: _go,
+      destinations: const [
+        NavigationDestination(icon: Icon(Icons.route_outlined), selectedIcon: Icon(Icons.route), label: 'Next Stop'),
+        NavigationDestination(icon: Icon(Icons.directions_car_outlined), selectedIcon: Icon(Icons.directions_car), label: 'المركبات'),
+        NavigationDestination(icon: Icon(Icons.badge_outlined), selectedIcon: Icon(Icons.badge), label: 'السائقون'),
+        NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), selectedIcon: Icon(Icons.account_balance_wallet), label: 'الحسابات'),
+        NavigationDestination(icon: Icon(Icons.notifications_none), selectedIcon: Icon(Icons.notifications_active), label: 'الإشعارات'),
+      ],
+    ),
+  );
+}
+class _ComingSoonPage extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final String detail;
+  const _ComingSoonPage({required this.title, required this.icon, required this.detail});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800, color: blue))),
+    body: Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 68, color: blue),
+      const SizedBox(height: 16),
+      Text(title, style: const TextStyle(fontSize: 23, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      Text(detail, textAlign: TextAlign.center),
+    ]))),
+  );
 }
