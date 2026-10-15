@@ -285,11 +285,11 @@ class _RouteMapPageState extends State<RouteMapPage> {
   Future<LatLng?> geocode(String address) async {
     // Try the original address first, then common Dutch address variants.
     // A single failed Nominatim lookup should not immediately break the route.
-    final original = address.trim().replaceAll(RegExp(r'\\s+'), ' ');
+    final original = address.trim().replaceAll(RegExp(r'\s+'), ' ').replaceAll(RegExp(r'(\d{4})\s*([A-Z]{2})(?=[A-Za-z])', caseSensitive:false), r'$1 $2 ');
     if (original.isEmpty) return null;
     final queries = <String>[
       original,
-      original.replaceAll(RegExp(r'\\b(\\d{4})\\s+([A-Z]{2})\\b', caseSensitive:false), r'\\1\\2'),
+      original.replaceAll(RegExp(r'\b(\d{4})\s+([A-Z]{2})\b', caseSensitive:false), r'$1$2'),
       if (!original.toLowerCase().contains('netherlands') && !original.toLowerCase().contains('nederland'))
         '$original, Netherlands',
     ].toSet();
