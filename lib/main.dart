@@ -282,15 +282,43 @@ class _RouteMapPageState extends State<RouteMapPage> {
   double? totalKm;
   int? totalMinutes;
   @override void initState(){super.initState();loadRoute();}
-  Future<LatLng?> geocode(String q) async {
-    try {
-      final uri=Uri.https('nominatim.openstreetmap.org','/search',{'q':q,'format':'jsonv2','limit':'1'});
-      final res=await http.get(uri,headers:{'User-Agent':'NextStopDeliveryPlanner/1.0'});
-      if(res.statusCode!=200)return null;
-      final data=jsonDecode(res.body) as List;
-      if(data.isEmpty)return null;
-      return LatLng(double.parse(data.first['lat'].toString()),double.parse(data.first['lon'].toString()));
-    } catch(_){return null;}
+  Future<LatLng?> geocode(String address) async {
+    // Try the original address first, then common Dutch address variants.
+    // A single failed Nominatim lookup should not immediately break the route.
+    final original = address.trim().replaceAll(RegExp(r'\\s+'), ' ');
+    if (original.isEmpty) return null;
+    final queries = <String>[
+      original,
+      original.replaceAll(RegExp(r'\\b(\\d{4})\\s+([A-Z]{2})\\b', caseSensitive:false), r'\\1\\2'),
+      if (!original.toLowerCase().contains('netherlands') && !original.toLowerCase().contains('nederland'))
+        '$original, Netherlands',
+    ].toSet();
+    for (final query in queries) {
+      try {
+        final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+          'q': query,
+          'format': 'jsonv2',
+          'limit': '1',
+          'countrycodes': 'nl',
+          'addressdetails': '1',
+        });
+        final res = await http.get(uri, headers: {
+          'User-Agent': 'NextStopDeliveryPlanner/1.0 (Android delivery route planner)',
+          'Accept-Language': 'nl,en',
+        }).timeout(const Duration(seconds: 12));
+        if (res.statusCode != 200) continue;
+        final decoded = jsonDecode(res.body);
+        if (decoded is! List || decoded.isEmpty || decoded.first is! Map) continue;
+        final first = decoded.first as Map;
+        final lat = double.tryParse(first['lat']?.toString() ?? '');
+        final lon = double.tryParse(first['lon']?.toString() ?? '');
+        if (lat != null && lon != null) return LatLng(lat, lon);
+      } catch (_) {
+        // Continue to the next query variant.
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+    }
+    return null;
   }
   Future<void> loadRoute() async {
     setState(() {loading=true;error=null;});
